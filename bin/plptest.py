@@ -116,7 +116,7 @@ class Sdk_test(Test):
 
     def __init__(self, config, name, flags='', commands=None, timeout=1000000, parent=None,
             path=None, restrict=None, tags=None, params=None, description=None, scores=None,
-            skip=None, testcase=None, checker=None, gen=None, check=None, run=None,
+            skip=None, testcase=None, checker=None, gen=None, check=None, run=None, run_prefix='',
             exclude=None):
 
         if params is None:
@@ -139,14 +139,14 @@ class Sdk_test(Test):
 
           if run is None:
             commands += [
-              Shell('all', 'make run %s' % (flags)),
+              Shell('all', '%smake run %s' % (run_prefix, flags)),
             ]
           else:
             commands += [
               Shell('build', 'make build %s' % (flags)),
               Shell('build', 'make image %s' % (flags)),
             ]
-            commands.append(Shell('run',   'make %s' % run))
+            commands.append(Shell('run',   '%smake %s' % (run_prefix, run)))
 
           if check is not None:
             commands.append(Shell('check', 'make %s %s' % (check, flags)))
