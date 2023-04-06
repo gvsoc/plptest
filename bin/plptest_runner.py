@@ -125,6 +125,8 @@ class CfgParser(object):
     self.file = file
     self.runner = runner
     self.path = os.path.dirname(self.file)
+    if self.path == '':
+      self.path = os.getcwd()
     self.config = {}
 
   def parse(self, topParent=None):
