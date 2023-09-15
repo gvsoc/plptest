@@ -216,8 +216,9 @@ class TestCommon(object):
 
 
     def get_stats(self, parent_stats):
-        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0}
+        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
         self.stats[self.status] += 1
+        self.stats['duration'] = self.duration
 
         if parent_stats is not None:
             for key in parent_stats.keys():
@@ -357,7 +358,7 @@ class TestsetImpl(testsuite.Testset):
 
     def get_stats(self, parent_stats):
 
-        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0}
+        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
 
         for child in self.tests + self.testsets:
             child.get_stats(self.stats)
@@ -457,7 +458,12 @@ class Runner():
         for testset in self.testsets:
             filename = '%s/TEST-%s.xml' % (report_path, testset.name)
             with open(filename, 'w') as test_file:
+                test_file.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+                test_file.write('<testsuite skipped="%d" errors="%d" failures="%d" name="%s" tests="%d" time="%f">\n' % \
+                    (testset.stats['skipped'], testset.stats['failed'], testset.stats['failed'], testset.name,
+                    testset.stats['failed'] + testset.stats['passed'], testset.stats['duration']))
                 testset.dump_junit(test_file)
+                test_file.write('</testsuite>\n')
 
 
 
