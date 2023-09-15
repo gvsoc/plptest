@@ -272,10 +272,10 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         TestCommon.__init__(self, runner, parent, name, path)
         self.runner = runner
         self.name = name
-        self.flags = flags
+        self.flags = flags + ' '.join(self.runner.flags)
 
-        self.add_command(testsuite.Shell('clean', 'make clean %s' % (flags)))
-        self.add_command(testsuite.Shell('all', 'make run %s' % (flags)))
+        self.add_command(testsuite.Shell('clean', 'make clean %s' % (self.flags)))
+        self.add_command(testsuite.Shell('all', 'make run %s' % (self.flags)))
 
 
 
@@ -408,6 +408,7 @@ class Runner():
         self.nb_pending_tests = 0
         self.test_skip_list = test_skip_list
         self.max_timeout = max_timeout
+        self.flags = flags
 
     def is_skipped(self, name):
         if self.test_skip_list is not None:
