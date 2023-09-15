@@ -392,7 +392,7 @@ class Runner():
     def __init__(self, config='default', load_average=0.9, nb_threads=0, properties=None,
             stdout=False, safe_stdout=False, max_output_len=-1, max_timeout=-1,
             test_list=None, test_skip_list=None, commands=None, commands_exclude=None,
-            flags=None, junit=None):
+            flags=None):
         self.nb_threads = nb_threads
         self.queue = queue.Queue()
         self.testsets = []

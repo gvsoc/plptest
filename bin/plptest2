@@ -84,6 +84,8 @@ if len(args.command) == 0:
 if args.testset is None:
   args.testset = [os.getcwd() + '/testset.cfg']
 
+runner = None
+
 try:
     runner = plptest.runner.Runner(
         config=args.config, load_average=args.load_average, nb_threads=args.threads,
@@ -116,5 +118,6 @@ except RuntimeError as e:
     sys.exit(1)
 
 except:
-    runner.stop()
+    if runner is not None:
+        runner.stop()
     raise
