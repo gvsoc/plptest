@@ -70,6 +70,8 @@ parser.add_argument("--cmd", dest="commands", action="append", default=None, met
 parser.add_argument("--cmd-exclude", dest="commands_exclude", action="append", default=None, metavar="PATH", help="Add command to be excluded. Default: %(default)s")
 parser.add_argument("--flags", dest="flags", action="append", default=[], help="Specifies flags")
 parser.add_argument("--junit-report-path", dest="junit_report_path", default='junit-reports', help="Specifies flags")
+parser.add_argument("--bench-regexp", dest="bench_regexp", default='.*@BENCH@(.*)@DESC@(.*)@', help="Specify regexp for extracting benchmark results")
+parser.add_argument("--bench-csv-file", dest="bench_csv_file", default=None, help="Specify CSV file for benchmark results")
 
 
 args = parser.parse_args()
@@ -92,7 +94,7 @@ try:
         properties=args.properties, stdout=args.stdout, safe_stdout=args.safe_stdout,
         max_output_len=args.max_output_len, max_timeout=args.max_timeout, test_list=args.test_list,
         test_skip_list=args.test_skip_list, commands=args.commands, commands_exclude=args.commands_exclude,
-        flags=args.flags
+        flags=args.flags, bench_csv_file=args.bench_csv_file, bench_regexp=args.bench_regexp
     )
 
     for testset in args.testset:

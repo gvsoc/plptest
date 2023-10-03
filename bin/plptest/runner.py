@@ -34,6 +34,7 @@ import re
 from xml.sax.saxutils import escape
 from threading import Timer
 import signal
+import csv
 
 
 class bcolors:
@@ -72,6 +73,7 @@ class TestCommon(object):
                 self.full_name =  f'{parent_name}:{self.name}'
 
         self.runner.declare_name(self.full_name)
+        self.benchs = []
 
 
     # Called by user to add commands
@@ -143,6 +145,17 @@ class TestCommon(object):
 
         if self.runner.safe_stdout:
             print (self.output)
+
+        for bench in self.benchs:
+            pattern = re.compile(bench[0])
+            for line in self.output.splitlines():
+                result = pattern.match(line)
+                if result is not None:
+                    value = float(result.group(1))
+                    name = bench[1]
+                    desc = bench[2]
+                    self.runner.register_bench_result(name, value, desc)
+
 
         self.__print_end_message()
 
@@ -273,10 +286,22 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         TestCommon.__init__(self, runner, parent, name, path)
         self.runner = runner
         self.name = name
-        self.flags = flags + ' '.join(self.runner.flags)
+        self.flags = flags
+        if self.flags is not None:
+            self.flags += ' ' + ' '.join(self.runner.flags)
+        else:
+            self.flags = ' '.join(self.runner.flags)
+
+        platform = self.runner.get_property('platform')
+        if platform is not None:
+            self.flags += ' platform=%s' % platform
 
         self.add_command(testsuite.Shell('clean', 'make clean %s' % (self.flags)))
         self.add_command(testsuite.Shell('all', 'make run %s' % (self.flags)))
+
+    def add_bench(self, extract, name, desc):
+        self.benchs.append([extract, name, desc])
+
 
 
 
@@ -393,7 +418,7 @@ class Runner():
     def __init__(self, config='default', load_average=0.9, nb_threads=0, properties=None,
             stdout=False, safe_stdout=False, max_output_len=-1, max_timeout=-1,
             test_list=None, test_skip_list=None, commands=None, commands_exclude=None,
-            flags=None):
+            flags=None, bench_csv_file=None, bench_regexp=None):
         self.nb_threads = nb_threads
         self.queue = queue.Queue()
         self.testsets = []
@@ -410,6 +435,24 @@ class Runner():
         self.test_skip_list = test_skip_list
         self.max_timeout = max_timeout
         self.flags = flags
+        self.bench_results = {}
+        self.bench_csv_file = bench_csv_file
+        self.properties = {}
+        for prop in properties:
+          name, value = prop.split('=')
+          self.properties[name] = value
+
+
+        if bench_csv_file is not None:
+            if os.path.exists(bench_csv_file):
+                with open(bench_csv_file, 'r') as file:
+                    csv_reader = csv.reader(file)
+                    for row in csv_reader:
+                        self.bench_results[row[0]] = row[1:]
+
+    def get_property(self, name):
+        return self.properties.get(name)
+
 
     def is_skipped(self, name):
         if self.test_skip_list is not None:
@@ -434,6 +477,13 @@ class Runner():
 
         for testset in self.testsets:
             testset.get_stats(None)
+
+        if self.bench_csv_file is not None:
+            with open(self.bench_csv_file, 'w') as file:
+                csv_writer = csv.writer(file)
+                for key, value in self.bench_results.items():
+                    csv_writer.writerow([key] + value)
+
 
 
     def declare_name(self, name):
@@ -542,3 +592,6 @@ class Runner():
             self.check_pending_tests()
 
         self.lock.release()
+
+    def register_bench_result(self, name, value, desc):
+        self.bench_results[name] = [value, desc]

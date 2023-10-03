@@ -40,13 +40,17 @@ class Testset(object, metaclass=abc.ABCMeta):
 
 class Test(object, metaclass=abc.ABCMeta):
 
-    pass
+    @abc.abstractmethod
+    def add_bench(self, extract, name, desc): pass
+
 
 
 
 class SdkTest(object, metaclass=abc.ABCMeta):
 
-    pass
+    @abc.abstractmethod
+    def add_bench(self, extract, name, desc): pass
+
 
 
 class Shell(object):
