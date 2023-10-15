@@ -303,6 +303,15 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         self.benchs.append([extract, name, desc])
 
 
+class NetlistPowerSdkTestImpl(SdkTestImpl):
+
+    def __init__(self, runner, parent, name, path, flags):
+        SdkTestImpl.__init__(self, runner, parent, name, path, flags)
+
+        self.add_command(testsuite.Shell('power_gen', 'make power_gen %s' % (self.flags)))
+        self.add_command(testsuite.Shell('power_copy', 'make power_copy %s' % (self.flags)))
+
+
 
 
 class TestsetImpl(testsuite.Testset):
@@ -315,6 +324,8 @@ class TestsetImpl(testsuite.Testset):
         self.parent = parent
         self.path = path
 
+    def get_property(self, name):
+        return self.runner.get_property(name)
 
     def set_name(self, name):
         self.name = name
@@ -364,6 +375,11 @@ class TestsetImpl(testsuite.Testset):
 
     def new_sdk_test(self, name, flags=''):
         test = SdkTestImpl(self.runner, self, name, self.path, flags)
+        self.tests.append(test)
+        return test
+
+    def new_sdk_netlist_power_test(self, name, flags=''):
+        test = NetlistPowerSdkTestImpl(self.runner, self, name, self.path, flags)
         self.tests.append(test)
         return test
 

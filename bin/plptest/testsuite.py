@@ -36,6 +36,12 @@ class Testset(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def new_sdk_test(self, name, flags=None): pass
 
+    @abc.abstractmethod
+    def new_sdk_netlist_power_test(self, name, flags=None): pass
+
+    @abc.abstractmethod
+    def get_property(self, name): pass
+
 
 
 class Test(object, metaclass=abc.ABCMeta):
