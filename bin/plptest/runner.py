@@ -278,6 +278,9 @@ class TestImpl(testsuite.Test, TestCommon):
         self.runner = runner
         self.name = name
 
+    def add_bench(self, extract, name, desc):
+        self.benchs.append([extract, name, desc])
+
 
 
 class SdkTestImpl(testsuite.SdkTest, TestCommon):
