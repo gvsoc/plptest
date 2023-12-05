@@ -64,3 +64,10 @@ class Shell(object):
   def __init__(self, name, cmd):
     self.name = name
     self.cmd = cmd
+
+
+class Checker(object):
+
+  def __init__(self, name, callback):
+    self.name = name
+    self.callback = callback

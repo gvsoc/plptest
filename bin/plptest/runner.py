@@ -221,8 +221,16 @@ class TestCommon(object):
             self.__dump_test_msg(f'--- Shell command: {command.cmd} ---\n')
             retval = self.__exec_process(command.cmd)
 
+        elif type(command) == testsuite.Checker:
+            self.__dump_test_msg(f'--- Checker command ---\n')
+            result = command.callback(self.output)
+            if result[1] is not None:
+                self.__dump_test_msg(result[1])
+
+            retval = 0 if result[0] else -1
+
         else:
-            print ('Unsupported command type: ' + type(command))
+            print ('Unsupported command type: ' + str(type(command)))
             retval = -1
 
         return retval
