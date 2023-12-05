@@ -229,6 +229,10 @@ class TestCommon(object):
 
             retval = 0 if result[0] else -1
 
+        elif type(command) == testsuite.Call:
+            self.__dump_test_msg(f'--- Call command ---\n')
+            return command.callback()
+
         else:
             print ('Unsupported command type: ' + str(type(command)))
             retval = -1

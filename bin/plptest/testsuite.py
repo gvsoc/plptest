@@ -66,6 +66,13 @@ class Shell(object):
     self.cmd = cmd
 
 
+class Call(object):
+
+  def __init__(self, name, callback):
+    self.name = name
+    self.callback = callback
+
+
 class Checker(object):
 
   def __init__(self, name, callback):
