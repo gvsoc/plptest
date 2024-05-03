@@ -199,7 +199,7 @@ class TestCommon(object):
 
         self.lock.release()
 
-        for line in io.TextIOWrapper(proc.stdout, encoding="utf-8"):
+        for line in io.TextIOWrapper(proc.stdout, encoding="utf-8", errors='replace'):
             self.__dump_test_msg(line)
 
         retval = proc.poll()
