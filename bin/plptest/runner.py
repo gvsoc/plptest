@@ -18,7 +18,6 @@
 
 import os
 import logging
-import imp
 import plptest.testsuite as testsuite
 import psutil
 import threading
@@ -35,6 +34,8 @@ from xml.sax.saxutils import escape
 from threading import Timer
 import signal
 import csv
+import importlib
+from importlib.machinery import SourceFileLoader
 
 
 class bcolors:
@@ -574,7 +575,9 @@ class Runner():
         logging.debug(f"Parsing file (path: {file})")
 
         try:
-            module = imp.load_source(file, file)
+            spec = importlib.util.spec_from_loader("module.name", SourceFileLoader("module.name", file))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
         except FileNotFoundError as exc:
             raise RuntimeError(bcolors.FAIL + 'Unable to open test configuration file: ' + file + bcolors.ENDC)
 
