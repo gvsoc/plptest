@@ -312,6 +312,8 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         if platform is not None:
             self.flags += ' --platform=%s' % platform
 
+        self.flags += f'--build=build/{self.name}'
+
         self.add_command(testsuite.Shell('clean', 'posbuild clean %s' % (self.flags)))
         self.add_command(testsuite.Shell('all', 'posbuild build run %s' % (self.flags)))
 
@@ -371,10 +373,6 @@ class TestsetImpl(testsuite.Testset):
         print ('new testset')
 
 
-    def new_test(self, test):
-        self.tests.append(test)
-
-
     def enqueue(self):
         for testset in self.testsets:
             testset.enqueue()
@@ -385,18 +383,21 @@ class TestsetImpl(testsuite.Testset):
 
     def new_test(self, name):
         test = TestImpl(self.runner, self, name, self.path)
-        self.tests.append(test)
+        if self.runner.is_selected(test):
+            self.tests.append(test)
         return test
 
 
     def new_sdk_test(self, name, flags=''):
         test = SdkTestImpl(self.runner, self, name, self.path, flags)
-        self.tests.append(test)
+        if self.runner.is_selected(test):
+            self.tests.append(test)
         return test
 
     def new_sdk_netlist_power_test(self, name, flags=''):
         test = NetlistPowerSdkTestImpl(self.runner, self, name, self.path, flags)
-        self.tests.append(test)
+        if self.runner.is_selected(test):
+            self.tests.append(test)
         return test
 
 
@@ -470,6 +471,7 @@ class Runner():
         self.bench_results = {}
         self.bench_csv_file = bench_csv_file
         self.properties = {}
+        self.test_list = test_list
         for prop in properties:
           name, value = prop.split('=')
           self.properties[name] = value
@@ -485,6 +487,15 @@ class Runner():
     def get_property(self, name):
         return self.properties.get(name)
 
+    def is_selected(self, test):
+        if self.test_list is None:
+            return True
+
+        for selected_test in self.test_list:
+            if test.get_full_name().find(selected_test) == 0:
+                return True
+
+        return False
 
     def is_skipped(self, name):
         if self.test_skip_list is not None:
