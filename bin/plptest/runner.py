@@ -312,7 +312,7 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         if platform is not None:
             self.flags += ' --platform=%s' % platform
 
-        self.flags += f'--build=build/{self.name}'
+        self.flags += f' --build=build/{self.name}'
 
         self.add_command(testsuite.Shell('clean', 'posbuild clean %s' % (self.flags)))
         self.add_command(testsuite.Shell('all', 'posbuild build run %s' % (self.flags)))
