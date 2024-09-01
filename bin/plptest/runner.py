@@ -203,7 +203,7 @@ class TestCommon(object):
         for line in io.TextIOWrapper(proc.stdout, encoding="utf-8", errors='replace'):
             self.__dump_test_msg(line)
 
-        retval = proc.poll()
+        retval = proc.wait()
         self.current_proc = None
 
         return retval
