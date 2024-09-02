@@ -224,7 +224,7 @@ class TestCommon(object):
 
         elif type(command) == testsuite.Checker:
             self.__dump_test_msg(f'--- Checker command ---\n')
-            result = command.callback(self.output)
+            result = command.callback(self, self.output)
             if result[1] is not None:
                 self.__dump_test_msg(result[1])
 
@@ -298,7 +298,7 @@ class TestImpl(testsuite.Test, TestCommon):
 
 class SdkTestImpl(testsuite.SdkTest, TestCommon):
 
-    def __init__(self, runner, parent, name, path, flags):
+    def __init__(self, runner, parent, name, path, flags, checker=None):
         TestCommon.__init__(self, runner, parent, name, path)
         self.runner = runner
         self.name = name
@@ -316,6 +316,9 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
 
         self.add_command(testsuite.Shell('clean', 'posbuild clean %s' % (self.flags)))
         self.add_command(testsuite.Shell('all', 'posbuild build run %s' % (self.flags)))
+
+        if checker is not None:
+            self.add_command(testsuite.Checker('check', checker))
 
     def add_bench(self, extract, name, desc):
         self.benchs.append([extract, name, desc])
@@ -388,8 +391,8 @@ class TestsetImpl(testsuite.Testset):
         return test
 
 
-    def new_sdk_test(self, name, flags=''):
-        test = SdkTestImpl(self.runner, self, name, self.path, flags)
+    def new_sdk_test(self, name, flags='', checker=None):
+        test = SdkTestImpl(self.runner, self, name, self.path, flags, checker=checker)
         if self.runner.is_selected(test):
             self.tests.append(test)
         return test
