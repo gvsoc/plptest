@@ -61,9 +61,10 @@ class SdkTest(object, metaclass=abc.ABCMeta):
 
 class Shell(object):
 
-  def __init__(self, name, cmd):
+  def __init__(self, name, cmd, retval=0):
     self.name = name
     self.cmd = cmd
+    self.retval = retval
 
 
 class Call(object):

@@ -220,7 +220,7 @@ class TestCommon(object):
 
         if type(command) == testsuite.Shell:
             self.__dump_test_msg(f'--- Shell command: {command.cmd} ---\n')
-            retval = self.__exec_process(command.cmd)
+            retval = 0 if self.__exec_process(command.cmd) == command.retval else 1
 
         elif type(command) == testsuite.Checker:
             self.__dump_test_msg(f'--- Checker command ---\n')
@@ -298,7 +298,7 @@ class TestImpl(testsuite.Test, TestCommon):
 
 class SdkTestImpl(testsuite.SdkTest, TestCommon):
 
-    def __init__(self, runner, parent, name, path, flags, checker=None):
+    def __init__(self, runner, parent, name, path, flags, checker=None, retval=0):
         TestCommon.__init__(self, runner, parent, name, path)
         self.runner = runner
         self.name = name
@@ -315,7 +315,8 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         self.flags += f' --build=build/{runner.get_config()}/{self.name}'
 
         self.add_command(testsuite.Shell('clean', 'posbuild clean %s' % (self.flags)))
-        self.add_command(testsuite.Shell('all', 'posbuild build run %s' % (self.flags)))
+        self.add_command(testsuite.Shell('build', 'posbuild build %s' % (self.flags)))
+        self.add_command(testsuite.Shell('run', 'posbuild run %s' % (self.flags), retval=retval))
 
         if checker is not None:
             self.add_command(testsuite.Checker('check', checker))
@@ -391,8 +392,8 @@ class TestsetImpl(testsuite.Testset):
         return test
 
 
-    def new_sdk_test(self, name, flags='', checker=None):
-        test = SdkTestImpl(self.runner, self, name, self.path, flags, checker=checker)
+    def new_sdk_test(self, name, flags='', checker=None, retval=0):
+        test = SdkTestImpl(self.runner, self, name, self.path, flags, checker=checker, retval=retval)
         if self.runner.is_selected(test):
             self.tests.append(test)
         return test
