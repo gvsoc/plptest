@@ -295,6 +295,34 @@ class TestImpl(testsuite.Test, TestCommon):
         self.benchs.append([extract, name, desc])
 
 
+class MakeTestImpl(testsuite.Test, TestCommon):
+
+    def __init__(self, runner, parent, name, path, flags, checker=None, retval=0):
+        TestCommon.__init__(self, runner, parent, name, path)
+        self.runner = runner
+        self.name = name
+        self.flags = flags
+        if self.flags is not None:
+            self.flags += ' ' + ' '.join(self.runner.flags)
+        else:
+            self.flags = ' '.join(self.runner.flags)
+
+        platform = self.runner.get_property('platform')
+        if platform is not None:
+            self.flags += ' platform=%s' % platform
+
+        self.flags += f' build=build/{runner.get_config()}/{self.name}'
+
+        self.add_command(testsuite.Shell('clean', 'make clean %s' % (self.flags)))
+        self.add_command(testsuite.Shell('build', 'make build %s' % (self.flags)))
+        self.add_command(testsuite.Shell('run', 'make run %s' % (self.flags), retval=retval))
+
+        if checker is not None:
+            self.add_command(testsuite.Checker('check', checker))
+
+    def add_bench(self, extract, name, desc):
+        self.benchs.append([extract, name, desc])
+
 
 class SdkTestImpl(testsuite.SdkTest, TestCommon):
 
@@ -391,6 +419,12 @@ class TestsetImpl(testsuite.Testset):
             self.tests.append(test)
         return test
 
+
+    def new_make_test(self, name, flags='', checker=None, retval=0):
+        test = MakeTestImpl(self.runner, self, name, self.path, flags, checker=checker, retval=retval)
+        if self.runner.is_selected(test):
+            self.tests.append(test)
+        return test
 
     def new_sdk_test(self, name, flags='', checker=None, retval=0):
         test = SdkTestImpl(self.runner, self, name, self.path, flags, checker=checker, retval=retval)
