@@ -76,7 +76,6 @@ class TestCommon(object):
         self.runner.declare_name(self.full_name)
         self.benchs = []
 
-
     # Called by user to add commands
     def add_command(self, command):
         self.commands.append(command)
@@ -373,6 +372,9 @@ class TestsetImpl(testsuite.Testset):
         self.testsets = []
         self.parent = parent
         self.path = path
+
+    def get_path(self):
+        return self.path
 
     def get_property(self, name):
         return self.runner.get_property(name)
