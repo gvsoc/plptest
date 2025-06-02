@@ -223,7 +223,7 @@ class TestCommon(object):
 
         elif type(command) == testsuite.Checker:
             self.__dump_test_msg(f'--- Checker command ---\n')
-            result = command.callback(self, self.output)
+            result = command.callback[0](self, self.output, *command.callback[1], **command.callback[2])
             if result[1] is not None:
                 self.__dump_test_msg(result[1])
 

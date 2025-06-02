@@ -76,6 +76,6 @@ class Call(object):
 
 class Checker(object):
 
-  def __init__(self, name, callback):
+  def __init__(self, name, callback, *kargs, **kwargs):
     self.name = name
-    self.callback = callback
+    self.callback = callback, kargs, kwargs
