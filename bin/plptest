@@ -72,6 +72,7 @@ parser.add_argument("--flags", dest="flags", action="append", default=[], help="
 parser.add_argument("--junit-report-path", dest="junit_report_path", default='junit-reports', help="Specifies flags")
 parser.add_argument("--bench-regexp", dest="bench_regexp", default='.*@BENCH@(.*)@DESC@(.*)@', help="Specify regexp for extracting benchmark results")
 parser.add_argument("--bench-csv-file", dest="bench_csv_file", default=None, help="Specify CSV file for benchmark results")
+parser.add_argument("--no-fail", dest="no_fail", action="store_true", help="Return an error if there is any test failure")
 
 
 args = parser.parse_args()
@@ -123,3 +124,6 @@ except:
     if runner is not None:
         runner.stop()
     raise
+
+if args.no_fail and runner.stats['failed'] != 0:
+  exit(1)

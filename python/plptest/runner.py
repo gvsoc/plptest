@@ -558,8 +558,9 @@ class Runner():
 
         self.event.wait()
 
+        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
         for testset in self.testsets:
-            testset.get_stats(None)
+            testset.get_stats(self.stats)
 
         if self.bench_csv_file is not None:
             with open(self.bench_csv_file, 'w') as file:
