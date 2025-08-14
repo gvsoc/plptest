@@ -36,6 +36,7 @@ import signal
 import csv
 import importlib
 from importlib.machinery import SourceFileLoader
+import json
 
 
 class bcolors:
@@ -44,74 +45,101 @@ class bcolors:
     OKGREEN = '\033[92m'
     WARNING = '\033[93m'
     FAIL = '\033[91m'
+    BG_HEADER =  '\033[105m'
+    BG_OKBLUE =  '\033[104m'
+    BG_OKGREEN = '\033[102m'
+    BG_WARNING = '\033[103m'
+    BG_FAIL =    '\033[101m'
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+def table_dump_row(table, name, config, duration, passed, failed, skipped, excluded):
+
+    total = passed + failed
+
+    if skipped == 0:
+        skipped_str = ''
+    else:
+        skipped_str = skipped
+
+    if excluded == 0:
+        excluded_str = ''
+    else:
+        excluded_str = excluded
+
+    if failed == 0:
+        failed_str = ''
+        name_str = name
+        config_str = config
+    else:
+        failed_str = failed
+        name_str = bcolors.FAIL + name + bcolors.ENDC
+        config_str = bcolors.FAIL + config + bcolors.ENDC
+
+    table.add_row([
+        name_str, config_str, f"{duration:.2f}", '%d/%d' % (passed, total), failed_str,
+        skipped_str, excluded_str
+    ])
 
 
-class TestCommon(object):
 
-    def __init__(self, runner, parent, name, path):
-        self.runner = runner
+class Target(object):
+
+    def __init__(self, name, config):
         self.name = name
-        self.parent = parent
-        self.full_name = None
-        self.commands = []
-        self.path = path
-        self.status = None
-        if self.path == '':
-            self.path = os.getcwd()
-        self.duration = 0
-        self.current_proc = None
+        self.config = json.loads(config)
+
+    def get_sourceme(self):
+        sourceme = self.config.get('sourceme')
+
+        if sourceme is not None:
+            return eval(sourceme)
+
+        return None
+
+
+class TestRun(object):
+
+    def __init__(self, test, target):
+        self.target = target
+        self.test = test
+        self.runner = test.runner
         self.lock = threading.Lock()
-
-        self.full_name = self.name
-
-        if self.parent is not None:
-            parent_name = self.parent.get_full_name()
-            if parent_name is not None:
-                self.full_name =  f'{parent_name}:{self.name}'
-
-        self.runner.declare_name(self.full_name)
-        self.benchs = []
-
-    # Called by user to add commands
-    def add_command(self, command):
-        self.commands.append(command)
-
-
-    # Called by runner to enqueue this test to the list of tests ready to be executed
-    def enqueue(self):
-        if self.runner.is_skipped(self.get_full_name()):
-            self.skip_message = "Skipped from command line"
-            self.status = "skipped"
-            self.__print_end_message()
+        self.duration = 0
+        if target is not None:
+            self.config = target.name
         else:
-            self.runner.enqueue_test(self)
+            self.config = self.runner.config
 
+        self.sourceme = None
 
-    # Can be called to get full name including hierarchy path
-    def get_full_name(self):
-        return self.full_name
+        if self.target is not None:
+            self.sourceme = self.target.get_sourceme()
 
+    def get_stats(self, parent_stats):
+        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
+        self.stats[self.status] += 1
+        self.stats['duration'] = self.duration
 
-    def kill(self):
-        self.lock.acquire()
-        self.timeout_reached = True
-        if self.current_proc is not None:
-            try:
-                process = psutil.Process(pid=self.current_proc.pid)
+        if parent_stats is not None:
+            for key in parent_stats.keys():
+                parent_stats[key] += self.stats[key]
 
-                for children in process.children(recursive=True):
-                    os.kill(children.pid, signal.SIGKILL)
-            except:
-                pass
-        self.lock.release()
-
+    def dump_table(self, table, dump_name):
+        table_dump_row(table,
+            self.test.get_full_name() if dump_name else '',
+            self.config,
+            self.duration,
+            self.stats['passed'],
+            self.stats['failed'],
+            self.stats['skipped'],
+            self.stats['excluded']
+        )
 
     # Called by worker to execute the test
     def run(self):
+
         self.__print_start_message()
 
         self.output = ''
@@ -126,8 +154,8 @@ class TestCommon(object):
             timer = Timer(timeout, self.kill)
             timer.start()
 
-        for command in self.commands:
-            retval = self.__exec_command(command)
+        for command in self.test.commands:
+            retval = self.__exec_command(command, self.sourceme)
 
             if retval != 0 or self.timeout_reached:
                 if self.timeout_reached:
@@ -146,7 +174,7 @@ class TestCommon(object):
         if self.runner.safe_stdout:
             print (self.output)
 
-        for bench in self.benchs:
+        for bench in self.test.benchs:
             pattern = re.compile(bench[0])
             for line in self.output.splitlines():
                 result = pattern.match(line)
@@ -161,19 +189,58 @@ class TestCommon(object):
 
         self.runner.terminate(self)
 
+    def dump_junit(self, test_file):
+        if self.status != 'excluded':
+            test_file.write('  <testcase classname="%s" name="%s" time="%f">\n' % (self.config, self.test.get_full_name(), self.duration))
+            if self.status == 'skipped':
+                test_file.write('    <skipped message="%s"/>\n' % self.skip_message)
+            else:
+                if self.status == 'passed':
+                    test_file.write('    <success/>\n')
+                else:
+                    test_file.write('    <failure>\n')
+                    for line in self.output:
+                        RE_XML_ILLEGAL = u'([\u0000-\u0008\u000b-\u000c\u000e-\u001f\ufffe-\uffff])' + \
+                                        u'|' + \
+                                        u'([%s-%s][^%s-%s])|([^%s-%s][%s-%s])|([%s-%s]$)|(^[%s-%s])' % \
+                                        (chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
+                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
+                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff))
+                        xml_line = re.sub(RE_XML_ILLEGAL, "", escape(line))
+                        test_file.write(xml_line)
+                    test_file.write('</failure>\n')
+            test_file.write('  </testcase>\n')
+
+    def kill(self):
+        self.lock.acquire()
+        self.timeout_reached = True
+        if self.current_proc is not None:
+            try:
+                process = psutil.Process(pid=self.current_proc.pid)
+
+                for children in process.children(recursive=True):
+                    os.kill(children.pid, signal.SIGKILL)
+            except:
+                pass
+        self.lock.release()
 
     # Print start bannier
     def __print_start_message(self):
-        testname = self.get_full_name().ljust(self.runner.get_max_testname_len() + 5)
-        config = self.runner.get_config()
+        testname = self.test.get_full_name().ljust(self.runner.get_max_testname_len() + 5)
+        if self.target is not None:
+            config = self.target.name
+        else:
+            config = self.runner.get_config()
         print (bcolors.OKBLUE + 'START'.ljust(8) + bcolors.ENDC + bcolors.BOLD + testname + bcolors.ENDC + ' %s' % (config))
         sys.stdout.flush()
 
-
     # Print end bannier
     def __print_end_message(self):
-        testname = self.get_full_name().ljust(self.runner.get_max_testname_len() + 5)
-        config = self.runner.get_config()
+        testname = self.test.get_full_name().ljust(self.runner.get_max_testname_len() + 5)
+        if self.target is not None:
+            config = self.target.name
+        else:
+            config = self.runner.get_config()
 
         if self.status == 'passed':
             test_result_str = bcolors.OKGREEN + 'OK '.ljust(8) + bcolors.ENDC
@@ -193,7 +260,7 @@ class TestCommon(object):
             return ['', -1]
 
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True,
-            cwd=self.path)
+            cwd=self.test.path)
 
         self.current_proc = proc
 
@@ -215,11 +282,17 @@ class TestCommon(object):
 
 
     # Called by run method to execute specific command
-    def __exec_command(self, command):
+    def __exec_command(self, command, sourceme):
 
         if type(command) == testsuite.Shell:
             self.__dump_test_msg(f'--- Shell command: {command.cmd} ---\n')
-            retval = 0 if self.__exec_process(command.cmd) == command.retval else 1
+
+            if sourceme is not None:
+                cmd = f'plptest_cmd_stub {sourceme} {command.cmd}'
+            else:
+                cmd = command.cmd
+
+            retval = 0 if self.__exec_process(cmd) == command.retval else 1
 
         elif type(command) == testsuite.Checker:
             self.__dump_test_msg(f'--- Checker command ---\n')
@@ -239,47 +312,95 @@ class TestCommon(object):
 
         return retval
 
+class TestCommon(object):
+
+    def __init__(self, runner, parent, name, path):
+        self.runner = runner
+        self.name = name
+        self.parent = parent
+        self.full_name = None
+        self.commands = []
+        self.path = path
+        self.status = None
+        if self.path == '':
+            self.path = os.getcwd()
+        self.current_proc = None
+
+        self.full_name = self.name
+
+        if self.parent is not None:
+            parent_name = self.parent.get_full_name()
+            if parent_name is not None:
+                self.full_name =  f'{parent_name}:{self.name}'
+
+        self.runner.declare_name(self.full_name)
+        self.benchs = []
+        self.runs = []
+
+    def get_target(self, target_name):
+        if self.parent is not None:
+            return self.parent.get_target(target_name)
+        return None
+
+    # Called by user to add commands
+    def add_command(self, command):
+        self.commands.append(command)
+
+
+    # Called by runner to enqueue this test to the list of tests ready to be executed
+    def enqueue(self, targets, target=None):
+        run = TestRun(self, target)
+        if self.runner.is_skipped(self.get_full_name()):
+            run.skip_message = "Skipped from command line"
+            run.status = "skipped"
+            run.__print_end_message()
+        self.runs.append(run)
+        self.runner.enqueue_test(run)
+
+
+    # Can be called to get full name including hierarchy path
+    def get_full_name(self):
+        return self.full_name
+
+
+
+
+
 
     def get_stats(self, parent_stats):
-        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
-        self.stats[self.status] += 1
-        self.stats['duration'] = self.duration
+        if len(self.runs) == 1:
+            return self.runs[0].get_stats(parent_stats)
+        else:
+            self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
+            for run in self.runs:
+                run.get_stats(self.stats)
 
-        if parent_stats is not None:
-            for key in parent_stats.keys():
-                parent_stats[key] += self.stats[key]
+            if parent_stats is not None:
+                for key in parent_stats.keys():
+                    parent_stats[key] += self.stats[key]
 
 
     def dump_table(self, table):
-        total = self.stats['passed'] + self.stats['failed']
+        if len(self.runs) == 1:
+            self.runs[0].dump_table(table, True)
+        else:
+            table_dump_row(table,
+                self.get_full_name(),
+                '',
+                self.stats['duration'],
+                self.stats['passed'],
+                self.stats['failed'],
+                self.stats['skipped'],
+                self.stats['excluded']
+            )
 
-        table.add_row([
-            self.get_full_name(), self.runner.config, self.duration, '%d/%d' % (self.stats['passed'], total), self.stats['failed'],
-            self.stats['skipped'], self.stats['excluded']
-        ])
+            for run in self.runs:
+                run.dump_table(table, False)
 
 
     def dump_junit(self, test_file):
-        if self.status != 'excluded':
-            test_file.write('  <testcase classname="%s" name="%s" time="%f">\n' % (self.runner.config, self.get_full_name(), self.duration))
-            if self.status == 'skipped':
-                test_file.write('    <skipped message="%s"/>\n' % self.skip_message)
-            else:
-                if self.status == 'passed':
-                    test_file.write('    <success/>\n')
-                else:
-                    test_file.write('    <failure>\n')
-                    for line in self.output:
-                        RE_XML_ILLEGAL = u'([\u0000-\u0008\u000b-\u000c\u000e-\u001f\ufffe-\uffff])' + \
-                                        u'|' + \
-                                        u'([%s-%s][^%s-%s])|([^%s-%s][%s-%s])|([%s-%s]$)|(^[%s-%s])' % \
-                                        (chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
-                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
-                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff))
-                        xml_line = re.sub(RE_XML_ILLEGAL, "", escape(line))
-                        test_file.write(xml_line)
-                    test_file.write('</failure>\n')
-            test_file.write('  </testcase>\n')
+        for run in self.runs:
+            run.dump_junit(test_file)
 
 
 
@@ -372,6 +493,15 @@ class TestsetImpl(testsuite.Testset):
         self.testsets = []
         self.parent = parent
         self.path = path
+        self.targets = {}
+
+    def get_target(self, target_name):
+        target = self.targets.get(target_name)
+        if target is not None:
+            return target
+        if self.parent is not None:
+            return self.parent.get_target(target_name)
+        return None
 
     def get_path(self):
         return self.path
@@ -382,6 +512,8 @@ class TestsetImpl(testsuite.Testset):
     def set_name(self, name):
         self.name = name
 
+    def add_target(self, name, config):
+        self.targets[name] = Target(name, config)
 
     def get_full_name(self):
         if self.parent is not None:
@@ -407,12 +539,23 @@ class TestsetImpl(testsuite.Testset):
         print ('new testset')
 
 
-    def enqueue(self):
-        for testset in self.testsets:
-            testset.enqueue()
+    def enqueue(self, targets, target=None):
 
-        for test in self.tests:
-            test.enqueue()
+        if targets is not None and len(self.targets) > 0:
+            for target_name in targets:
+                target = self.targets.get(target_name)
+                if target is not None:
+                    for testset in self.testsets:
+                        testset.enqueue(None, target)
+
+                    for test in self.tests:
+                        test.enqueue(None, target)
+        else:
+            for testset in self.testsets:
+                testset.enqueue(targets, target)
+
+            for test in self.tests:
+                test.enqueue(targets, target)
 
 
     def new_test(self, name):
@@ -443,12 +586,15 @@ class TestsetImpl(testsuite.Testset):
 
     def dump_table(self, table):
         if self.name is not None:
-            total = self.stats['passed'] + self.stats['failed']
-
-            table.add_row([
-                self.get_full_name(), self.runner.config, 0, '%d/%d' % (self.stats['passed'], total), self.stats['failed'],
-                self.stats['skipped'], self.stats['excluded']
-            ])
+            table_dump_row(table,
+                self.get_full_name(),
+                '',
+                self.stats['duration'],
+                self.stats['passed'],
+                self.stats['failed'],
+                self.stats['skipped'],
+                self.stats['excluded']
+            )
 
         for child in self.tests + self.testsets:
             child.dump_table(table)
@@ -491,7 +637,7 @@ class Runner():
     def __init__(self, config='default', load_average=0.9, nb_threads=0, properties=None,
             stdout=False, safe_stdout=False, max_output_len=-1, max_timeout=-1,
             test_list=None, test_skip_list=None, commands=None, commands_exclude=None,
-            flags=None, bench_csv_file=None, bench_regexp=None):
+            flags=None, bench_csv_file=None, bench_regexp=None, targets=None):
         self.nb_threads = nb_threads
         self.queue = queue.Queue()
         self.testsets = []
@@ -512,6 +658,7 @@ class Runner():
         self.bench_csv_file = bench_csv_file
         self.properties = {}
         self.test_list = test_list
+        self.targets = targets
         for prop in properties:
           name, value = prop.split('=')
           self.properties[name] = value
@@ -550,7 +697,7 @@ class Runner():
         self.event.clear()
 
         for testset in self.testsets:
-            testset.enqueue()
+            testset.enqueue(self.targets)
 
         self.lock.acquire()
         self.check_pending_tests()
@@ -578,6 +725,7 @@ class Runner():
 
     def dump_table(self):
         x = PrettyTable(['test', 'config', 'time', 'passed/total', 'failed', 'skipped', 'excluded'])
+        x.align = "r"
         x.align["test"] = "l"
         x.align["config"] = "l"
         for testset in self.testsets:
@@ -620,6 +768,8 @@ class Runner():
             self.queue.put(None)
 
     def add_testset(self, file):
+        if not os.path.isabs(file):
+            file = os.path.join(os.getcwd(), file)
         self.testsets.append(self.import_testset(file))
 
 
@@ -657,7 +807,7 @@ class Runner():
         if self.nb_running_tests >= self.nb_threads:
             return False
 
-        return psutil.cpu_percent(interval=0.1) < self.load_average * 100
+        return psutil.cpu_percent(interval=0.01) < self.load_average * 100
 
 
     def get_max_testname_len(self):

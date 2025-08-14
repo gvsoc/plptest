@@ -25,6 +25,9 @@ class Testset(object, metaclass=abc.ABCMeta):
     def set_name(self, name): pass
 
     @abc.abstractmethod
+    def add_target(self, name, config): pass
+
+    @abc.abstractmethod
     def import_testset(self, file): pass
 
     @abc.abstractmethod

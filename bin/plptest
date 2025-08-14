@@ -57,6 +57,7 @@ parser.add_argument("--testset", dest="testset", action="append", default=None, 
 parser.add_argument("--property", dest="properties", action="append", default=[], help="Specifies property")
 parser.add_argument('--py-stack', dest='py_stack', action="store_true", help='Show python exception stack.')
 parser.add_argument('--verbose', dest='verbose', action="store_true", help='Enable verbose mode.')
+parser.add_argument("--target", dest="targets", action="append", help="Specify a target for which the tests must be run")
 parser.add_argument("--threads", dest="threads", default=0, type=int, help="Specify the number of worker threads")
 parser.add_argument("--config", dest="config", default='default', help="Specify config name")
 parser.add_argument("--load-average", dest="load_average", default=0.9, type=float, help="Specify the system average load that this tool should try to respect, from 0 to 1")
@@ -95,7 +96,7 @@ try:
         properties=args.properties, stdout=args.stdout, safe_stdout=args.safe_stdout,
         max_output_len=args.max_output_len, max_timeout=args.max_timeout, test_list=args.test_list,
         test_skip_list=args.test_skip_list, commands=args.commands, commands_exclude=args.commands_exclude,
-        flags=args.flags, bench_csv_file=args.bench_csv_file, bench_regexp=args.bench_regexp
+        flags=args.flags, bench_csv_file=args.bench_csv_file, bench_regexp=args.bench_regexp, targets=args.targets
     )
 
     for testset in args.testset:

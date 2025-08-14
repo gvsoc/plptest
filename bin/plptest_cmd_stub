@@ -1,0 +1,13 @@
+#!/bin/bash
+
+ENVFILE="$1"
+shift
+
+if [[ ! -f "$ENVFILE" ]]; then
+    echo "Error: Environment file '$ENVFILE' not found."
+    exit 1
+fi
+
+source "$ENVFILE"
+
+exec "$@"
