@@ -124,6 +124,12 @@ class TestRun(object):
         if self.target is not None:
             self.sourceme = self.target.get_sourceme()
 
+    def get_target_name(self):
+        if self.target is None:
+            return self.config
+
+        return self.target.name
+
     def get_stats(self, parent_stats):
         self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
         self.stats[self.status] += 1
@@ -199,7 +205,14 @@ class TestRun(object):
 
     def dump_junit(self, test_file):
         if self.status != 'excluded':
-            test_file.write('  <testcase classname="%s" name="%s" time="%f">\n' % (self.config, self.test.get_full_name(), self.duration))
+            fullname = self.test.get_full_name()
+            if fullname.find(':') == -1:
+                name = fullname
+                classname = self.get_target_name()
+            else:
+                testsuite, name = fullname.split(':', 1)
+                classname = f'{self.get_target_name()}.{testsuite}'
+            test_file.write('  <testcase classname="%s" name="%s" time="%f">\n' % (classname, name, self.duration))
             if self.status == 'skipped':
                 test_file.write('    <skipped message="%s"/>\n' % self.skip_message)
             else:
