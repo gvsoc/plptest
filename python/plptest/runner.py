@@ -199,7 +199,7 @@ class TestRun(object):
                     self.runner.register_bench_result(name, value, desc)
 
 
-        self.__print_end_message()
+        self.print_end_message()
 
         self.runner.terminate(self)
 
@@ -259,7 +259,7 @@ class TestRun(object):
         sys.stdout.flush()
 
     # Print end bannier
-    def __print_end_message(self):
+    def print_end_message(self):
         testname = self.test.get_full_name().ljust(self.runner.get_max_testname_len() + 5)
         if self.target is not None:
             config = self.target.name
@@ -348,6 +348,7 @@ class TestCommon(object):
         self.commands = []
         self.path = path
         self.status = None
+        self.skipped = None
         if self.path == '':
             self.path = os.getcwd()
         self.current_proc = None
@@ -363,6 +364,9 @@ class TestCommon(object):
         self.benchs = []
         self.runs = []
 
+    def skip(self, msg):
+        self.skipped = msg
+
     def get_target(self, target_name):
         if self.parent is not None:
             return self.parent.get_target(target_name)
@@ -376,12 +380,18 @@ class TestCommon(object):
     # Called by runner to enqueue this test to the list of tests ready to be executed
     def enqueue(self, targets, target=None):
         run = TestRun(self, target)
-        if self.runner.is_skipped(self.get_full_name()):
-            run.skip_message = "Skipped from command line"
+        if self.runner.is_skipped(self.get_full_name()) or self.skipped is not None:
+            if self.skipped is not None:
+                run.skip_message = self.skipped
+            else:
+                run.skip_message = "Skipped from command line"
             run.status = "skipped"
-            run.__print_end_message()
-        self.runs.append(run)
-        self.runner.enqueue_test(run)
+            self.runs.append(run)
+            run.print_end_message()
+
+        else:
+            self.runs.append(run)
+            self.runner.enqueue_test(run)
 
 
     # Can be called to get full name including hierarchy path
@@ -544,7 +554,9 @@ class TestsetImpl(testsuite.Testset):
     def set_name(self, name):
         self.name = name
 
-    def add_target(self, name, config):
+    def add_target(self, name, config=None):
+        if config is None:
+            config = '{}'
         self.targets[name] = Target(name, config)
 
     def get_full_name(self):
@@ -567,8 +579,12 @@ class TestsetImpl(testsuite.Testset):
         self.testsets.append(self.runner.import_testset(filepath, self))
 
 
-    def new_testset(self, testset):
-        print ('new testset')
+    def new_testset(self, testset_name):
+        testset = TestsetImpl(self.runner, self, path=self.path)
+        testset.set_name(testset_name)
+        self.testsets.append(testset)
+
+        return testset
 
 
     def enqueue(self, targets, target=None):
