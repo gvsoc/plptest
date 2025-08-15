@@ -37,6 +37,7 @@ import csv
 import importlib
 from importlib.machinery import SourceFileLoader
 import json
+import time
 
 
 class bcolors:
@@ -642,7 +643,6 @@ class Runner():
         self.queue = queue.Queue()
         self.testsets = []
         self.pending_tests = []
-        self.nb_running_tests = 0
         self.max_testname_len = 0
         self.config = config
         self.event = threading.Event()
@@ -659,6 +659,7 @@ class Runner():
         self.properties = {}
         self.test_list = test_list
         self.targets = targets
+        self.cpu_poll_interval = 0.1
         for prop in properties:
           name, value = prop.split('=')
           self.properties[name] = value
@@ -699,9 +700,7 @@ class Runner():
         for testset in self.testsets:
             testset.enqueue(self.targets)
 
-        self.lock.acquire()
         self.check_pending_tests()
-        self.lock.release()
 
         self.event.wait()
 
@@ -798,16 +797,22 @@ class Runner():
 
 
     def check_pending_tests(self):
-        while len(self.pending_tests) > 0 and len(self.pending_tests) > 0 and self.check_cpu_load():
+        while len(self.pending_tests) > 0:
+
+            while not self.check_cpu_load():
+                time.sleep(self.cpu_poll_interval)
+
             test = self.pending_tests.pop()
             self.queue.put(test)
 
 
     def check_cpu_load(self):
-        if self.nb_running_tests >= self.nb_threads:
-            return False
+        if self.load_average == 1.0:
+            return True
 
-        return psutil.cpu_percent(interval=0.01) < self.load_average * 100
+        load = psutil.cpu_percent(interval=self.cpu_poll_interval)
+
+        return load < self.load_average * 100
 
 
     def get_max_testname_len(self):
@@ -816,16 +821,10 @@ class Runner():
 
     def terminate(self, test):
         self.lock.acquire()
-
         self.nb_pending_tests -= 1
-
-        if test in self.pending_tests:
-            self.pending_tests.remove(test)
 
         if self.nb_pending_tests == 0:
             self.event.set()
-        else:
-            self.check_pending_tests()
 
         self.lock.release()
 
