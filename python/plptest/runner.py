@@ -99,6 +99,12 @@ class Target(object):
 
         return None
 
+    def format_properties(self, str):
+        properties = self.config.get('properties')
+        if properties is None:
+            return str
+        return str.format(**properties)
+
 
 class TestRun(object):
 
@@ -156,7 +162,8 @@ class TestRun(object):
             timer.start()
 
         for command in self.test.commands:
-            retval = self.__exec_command(command, self.sourceme)
+
+            retval = self.__exec_command(command, self.target, self.sourceme)
 
             if retval != 0 or self.timeout_reached:
                 if self.timeout_reached:
@@ -283,15 +290,17 @@ class TestRun(object):
 
 
     # Called by run method to execute specific command
-    def __exec_command(self, command, sourceme):
+    def __exec_command(self, command, target, sourceme):
 
         if type(command) == testsuite.Shell:
-            self.__dump_test_msg(f'--- Shell command: {command.cmd} ---\n')
+            cmd = command.cmd
+            if self.target is not None:
+                cmd = self.target.format_properties(cmd)
+
+            self.__dump_test_msg(f'--- Shell command: {cmd} ---\n')
 
             if sourceme is not None:
-                cmd = f'plptest_cmd_stub {sourceme} {command.cmd}'
-            else:
-                cmd = command.cmd
+                cmd = f'plptest_cmd_stub {sourceme} {cmd}'
 
             retval = 0 if self.__exec_process(cmd) == command.retval else 1
 
@@ -369,6 +378,9 @@ class TestCommon(object):
 
 
     def get_stats(self, parent_stats):
+        if len(self.runs) == 0:
+            return
+
         if len(self.runs) == 1:
             return self.runs[0].get_stats(parent_stats)
         else:
@@ -382,6 +394,9 @@ class TestCommon(object):
 
 
     def dump_table(self, table):
+        if len(self.runs) == 0:
+            return
+
         if len(self.runs) == 1:
             self.runs[0].dump_table(table, True)
         else:
@@ -542,15 +557,16 @@ class TestsetImpl(testsuite.Testset):
 
     def enqueue(self, targets, target=None):
 
-        if targets is not None and len(self.targets) > 0:
-            for target_name in targets:
-                target = self.targets.get(target_name)
-                if target is not None:
-                    for testset in self.testsets:
-                        testset.enqueue(None, target)
+        if len(self.targets) > 0:
+            if targets is not None:
+                for target_name in targets:
+                    target = self.targets.get(target_name)
+                    if target is not None:
+                        for testset in self.testsets:
+                            testset.enqueue(None, target)
 
-                    for test in self.tests:
-                        test.enqueue(None, target)
+                        for test in self.tests:
+                            test.enqueue(None, target)
         else:
             for testset in self.testsets:
                 testset.enqueue(targets, target)
@@ -586,6 +602,14 @@ class TestsetImpl(testsuite.Testset):
 
 
     def dump_table(self, table):
+
+        is_empty = True
+        for stat in self.stats.values():
+            if stat != 0:
+                is_empty = False
+        if is_empty:
+            return
+
         if self.name is not None:
             table_dump_row(table,
                 self.get_full_name(),

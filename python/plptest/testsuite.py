@@ -19,6 +19,12 @@
 import abc
 
 
+class Target(object, metaclass=abc.ABCMeta):
+
+    @abc.abstractmethod
+    def get_name(self): pass
+
+
 class Testset(object, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
@@ -26,6 +32,9 @@ class Testset(object, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def add_target(self, name, config): pass
+
+    @abc.abstractmethod
+    def get_target(self): pass
 
     @abc.abstractmethod
     def import_testset(self, file): pass
