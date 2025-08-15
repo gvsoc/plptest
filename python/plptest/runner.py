@@ -206,11 +206,14 @@ class TestRun(object):
     def dump_junit(self, test_file):
         if self.status != 'excluded':
             fullname = self.test.get_full_name()
-            if fullname.find(':') == -1:
+            if fullname.count(':') == 0:
                 name = fullname
                 classname = self.get_target_name()
-            else:
+            elif fullname.count(':') == 1:
                 testsuite, name = fullname.split(':', 1)
+                classname = f'{self.get_target_name()}.{testsuite}'
+            else:
+                testset, testsuite, name = fullname.split(':', 2)
                 classname = f'{self.get_target_name()}.{testsuite}'
             test_file.write('  <testcase classname="%s" name="%s" time="%f">\n' % (classname, name, self.duration))
             if self.status == 'skipped':
