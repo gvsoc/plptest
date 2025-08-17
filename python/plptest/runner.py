@@ -93,6 +93,9 @@ class Target(object):
             config = '{}'
         self.config = json.loads(config)
 
+    def get_name(self):
+        return self.name
+
     def get_sourceme(self):
         sourceme = self.config.get('sourceme')
 
@@ -106,6 +109,13 @@ class Target(object):
         if properties is None:
             return str
         return str.format(**properties)
+
+    def get_property(self, name):
+        properties = self.config.get('properties')
+        if properties is None:
+            return None
+        return properties.get(name)
+
 
 
 class TestRunStats(object):
@@ -129,31 +139,67 @@ class TestRunStats(object):
             self.stats['excluded']
         )
 
+    def dump_junit(self, test_file):
+        if self.run.status != 'excluded':
+            fullname = self.run.test.get_full_name()
+            if fullname.count(':') == 0:
+                name = fullname
+                classname = self.run.get_target_name()
+            elif fullname.count(':') == 1:
+                testsuite, name = fullname.split(':', 1)
+                classname = f'{self.run.get_target_name()}.{testsuite}'
+            else:
+                testset, testsuite, name = fullname.split(':', 2)
+                classname = f'{self.run.get_target_name()}.{testsuite}'
+            test_file.write('  <testcase classname="%s" name="%s" time="%f">\n' % (classname, name, self.run.duration))
+            if self.run.status == 'skipped':
+                test_file.write('    <skipped message="%s"/>\n' % self.run.skip_message)
+            else:
+                if self.run.status == 'passed':
+                    test_file.write('    <success/>\n')
+                else:
+                    test_file.write('    <failure>\n')
+                    for line in self.run.output:
+                        RE_XML_ILLEGAL = u'([\u0000-\u0008\u000b-\u000c\u000e-\u001f\ufffe-\uffff])' + \
+                                        u'|' + \
+                                        u'([%s-%s][^%s-%s])|([^%s-%s][%s-%s])|([%s-%s]$)|(^[%s-%s])' % \
+                                        (chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
+                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
+                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff))
+                        xml_line = re.sub(RE_XML_ILLEGAL, "", escape(line))
+                        test_file.write(xml_line)
+                    test_file.write('</failure>\n')
+            test_file.write('  </testcase>\n')
+
 
 class TestStats(object):
 
     def __init__(self, parent=None, test=None):
         self.parent = parent
         self.test = test
-        self.child_runs = {}
+        self.child_runs_dict = {}
+        self.child_runs = []
         self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
 
     def add_child_run(self, run):
-        child_run_stats = self.child_runs.get(run.target)
+        child_run_stats = self.child_runs_dict.get(run.target)
         if child_run_stats is None:
             child_run_stats = TestRunStats(run=run, parent=self)
-            self.child_runs[run.target] = child_run_stats
+            self.child_runs_dict[run.target] = child_run_stats
+            self.child_runs.append(child_run_stats)
 
     def add_stats(self, stats):
         for key in stats.keys():
             self.stats[key] += stats[key]
+        if self.parent:
+            self.parent.add_stats(stats)
 
     def dump_table(self, table):
         if len(self.child_runs) == 0:
             return
 
         if len(self.child_runs) == 1:
-            self.child_runs.values()[0].dump_table(table, True)
+            self.child_runs[0].dump_table(table, True)
         else:
             table_dump_row(table,
                 self.test.get_full_name(),
@@ -165,8 +211,12 @@ class TestStats(object):
                 self.stats['excluded']
             )
 
-            for run in self.child_runs.values():
+            for run in self.child_runs:
                 run.dump_table(table, False)
+
+    def dump_junit(self, test_file):
+        for run in self.child_runs:
+            run.dump_junit(test_file)
 
 class TestsetStats(object):
 
@@ -177,6 +227,12 @@ class TestsetStats(object):
         self.parent = parent
         self.testset = testset
         self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
+
+    def add_stats(self, stats):
+        for key in stats.keys():
+            self.stats[key] += stats[key]
+        if self.parent:
+            self.parent.add_stats(stats)
 
     def add_child_testset(self, testset):
         child_testset_stats = self.child_testsets.get(testset.name)
@@ -200,14 +256,14 @@ class TestsetStats(object):
             child_test_stats.add_child_run(run)
 
     def dump_table(self, table):
-        # is_empty = True
-        # for stat in self.stats.values():
-        #     if stat != 0:
-        #         is_empty = False
-        # if is_empty:
-        #     return
+        is_empty = True
+        for stat in self.stats.values():
+            if stat != 0:
+                is_empty = False
+        if is_empty:
+            return
 
-        if self.testset is not None:
+        if self.testset is not None and self.testset.name is not None:
             table_dump_row(table,
                 self.testset.get_full_name(),
                 '',
@@ -223,6 +279,28 @@ class TestsetStats(object):
 
         for child in self.child_testsets.values():
             child.dump_table(table)
+
+    def dump_junit(self, test_file):
+        for child in self.child_testsets.values():
+            child.dump_junit(test_file)
+
+        for child in self.child_tests.values():
+            child.dump_junit(test_file)
+
+    def dump_junit_files(self, report_path):
+        os.makedirs(report_path, exist_ok=True)
+
+        for stats in self.child_testsets.values():
+            testset = stats.testset
+            filename = '%s/TEST-%s.xml' % (report_path, testset.name)
+            with open(filename, 'w') as test_file:
+                test_file.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+                test_file.write('<testsuite skipped="%d" errors="%d" failures="%d" name="%s" tests="%d" time="%f">\n' % \
+                    (stats.stats['skipped'], stats.stats['failed'], stats.stats['failed'], testset.name,
+                    stats.stats['failed'] + stats.stats['passed'], stats.stats['duration']))
+                stats.dump_junit(test_file)
+                test_file.write('</testsuite>\n')
+
 
 
 
@@ -308,38 +386,6 @@ class TestRun(object):
         self.print_end_message()
 
         self.runner.terminate(self)
-
-    def dump_junit(self, test_file):
-        if self.status != 'excluded':
-            fullname = self.test.get_full_name()
-            if fullname.count(':') == 0:
-                name = fullname
-                classname = self.get_target_name()
-            elif fullname.count(':') == 1:
-                testsuite, name = fullname.split(':', 1)
-                classname = f'{self.get_target_name()}.{testsuite}'
-            else:
-                testset, testsuite, name = fullname.split(':', 2)
-                classname = f'{self.get_target_name()}.{testsuite}'
-            test_file.write('  <testcase classname="%s" name="%s" time="%f">\n' % (classname, name, self.duration))
-            if self.status == 'skipped':
-                test_file.write('    <skipped message="%s"/>\n' % self.skip_message)
-            else:
-                if self.status == 'passed':
-                    test_file.write('    <success/>\n')
-                else:
-                    test_file.write('    <failure>\n')
-                    for line in self.output:
-                        RE_XML_ILLEGAL = u'([\u0000-\u0008\u000b-\u000c\u000e-\u001f\ufffe-\uffff])' + \
-                                        u'|' + \
-                                        u'([%s-%s][^%s-%s])|([^%s-%s][%s-%s])|([%s-%s]$)|(^[%s-%s])' % \
-                                        (chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
-                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff),
-                                        chr(0xd800),chr(0xdbff),chr(0xdc00),chr(0xdfff))
-                        xml_line = re.sub(RE_XML_ILLEGAL, "", escape(line))
-                        test_file.write(xml_line)
-                    test_file.write('</failure>\n')
-            test_file.write('  </testcase>\n')
 
     def kill(self):
         self.lock.acquire()
@@ -503,10 +549,6 @@ class TestCommon(object):
     def get_full_name(self):
         return self.full_name
 
-    def dump_junit(self, test_file):
-        for run in self.runs:
-            run.dump_junit(test_file)
-
 
 
 class TestImpl(testsuite.Test, TestCommon):
@@ -631,17 +673,34 @@ class TestsetImpl(testsuite.Testset):
         return self.name
 
     def import_testset(self, file):
+        active_targets = self.runner.get_active_targets()
         filepath = file
         if self.path is not None:
             filepath = os.path.join(self.path, file)
 
-        if len(self.targets) == 0:
+        if len(self.targets) == 0 or len(active_targets) == 1 and active_targets[0] == 'default':
             self.testsets.append(self.runner.import_testset(filepath, self.target, self))
+        else:
+            for target_name in active_targets:
+                target = self.targets.get(target_name)
+                if target is not None:
+                    self.testsets.append(self.runner.import_testset(filepath, target, self))
+
+    def add_testset(self, callback):
+        active_targets = self.runner.get_active_targets()
+        if len(self.targets) == 0 or len(active_targets) == 1 and active_targets[0] == 'default':
+            self.__new_testset(callback, self.target)
         else:
             for target_name in self.runner.get_active_targets():
                 target = self.targets.get(target_name)
                 if target is not None:
-                    self.testsets.append(self.runner.import_testset(filepath, target, self))
+                    self.__new_testset(callback, target)
+
+    def __new_testset(self, callback, target):
+        testset = TestsetImpl(self.runner, target, self, path=self.path)
+        self.testsets.append(testset)
+        callback(testset)
+        return testset
 
     def new_testset(self, testset_name):
         testset = TestsetImpl(self.runner, self.target, self, path=self.path)
@@ -684,10 +743,6 @@ class TestsetImpl(testsuite.Testset):
         if self.runner.is_selected(test):
             self.tests.append(test)
         return test
-
-    def dump_junit(self, test_file):
-        for child in self.testsets + self.tests:
-            child.dump_junit(test_file)
 
 
 class Worker(threading.Thread):
@@ -778,9 +833,11 @@ class Runner():
         for testset in self.testsets:
             testset.enqueue()
 
-        self.check_pending_tests()
+        if len(self.pending_tests) > 0:
 
-        self.event.wait()
+            self.check_pending_tests()
+
+            self.event.wait()
 
         self.stats = TestsetStats()
         for testset in self.testsets:
@@ -813,15 +870,7 @@ class Runner():
     def dump_junit(self, report_path):
         os.makedirs(report_path, exist_ok=True)
 
-        for testset in self.testsets:
-            filename = '%s/TEST-%s.xml' % (report_path, testset.name)
-            with open(filename, 'w') as test_file:
-                test_file.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-                test_file.write('<testsuite skipped="%d" errors="%d" failures="%d" name="%s" tests="%d" time="%f">\n' % \
-                    (testset.stats['skipped'], testset.stats['failed'], testset.stats['failed'], testset.name,
-                    testset.stats['failed'] + testset.stats['passed'], testset.stats['duration']))
-                testset.dump_junit(test_file)
-                test_file.write('</testsuite>\n')
+        self.stats.dump_junit_files(report_path)
 
 
 
