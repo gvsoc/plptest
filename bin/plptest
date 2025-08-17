@@ -126,5 +126,5 @@ except:
         runner.stop()
     raise
 
-if args.no_fail and runner.stats['failed'] != 0:
+if args.no_fail and runner.stats.stats['failed'] != 0:
   exit(1)
