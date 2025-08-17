@@ -519,6 +519,7 @@ class TestCommon(object):
 
     def skip(self, msg):
         self.skipped = msg
+        return self
 
     def get_target(self):
         return self.target
