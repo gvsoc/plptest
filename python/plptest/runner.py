@@ -87,8 +87,10 @@ def table_dump_row(table, name, config, duration, passed, failed, skipped, exclu
 
 class Target(object):
 
-    def __init__(self, name, config):
+    def __init__(self, name, config=None):
         self.name = name
+        if config is None:
+            config = '{}'
         self.config = json.loads(config)
 
     def get_sourceme(self):
@@ -104,6 +106,126 @@ class Target(object):
         if properties is None:
             return str
         return str.format(**properties)
+
+
+class TestRunStats(object):
+
+    def __init__(self, run, parent=None):
+        self.run = run
+        self.parent = parent
+        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
+        run.get_stats(self.stats)
+        if parent:
+            parent.add_stats(self.stats)
+
+    def dump_table(self, table, dump_name):
+        table_dump_row(table,
+            self.run.test.get_full_name() if dump_name else '',
+            self.run.config,
+            self.stats['duration'],
+            self.stats['passed'],
+            self.stats['failed'],
+            self.stats['skipped'],
+            self.stats['excluded']
+        )
+
+
+class TestStats(object):
+
+    def __init__(self, parent=None, test=None):
+        self.parent = parent
+        self.test = test
+        self.child_runs = {}
+        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
+
+    def add_child_run(self, run):
+        child_run_stats = self.child_runs.get(run.target)
+        if child_run_stats is None:
+            child_run_stats = TestRunStats(run=run, parent=self)
+            self.child_runs[run.target] = child_run_stats
+
+    def add_stats(self, stats):
+        for key in stats.keys():
+            self.stats[key] += stats[key]
+
+    def dump_table(self, table):
+        if len(self.child_runs) == 0:
+            return
+
+        if len(self.child_runs) == 1:
+            self.child_runs.values()[0].dump_table(table, True)
+        else:
+            table_dump_row(table,
+                self.test.get_full_name(),
+                '',
+                self.stats['duration'],
+                self.stats['passed'],
+                self.stats['failed'],
+                self.stats['skipped'],
+                self.stats['excluded']
+            )
+
+            for run in self.child_runs.values():
+                run.dump_table(table, False)
+
+class TestsetStats(object):
+
+    def __init__(self, testset=None, parent=None):
+        self.child_tests = {}
+        self.child_testsets = {}
+
+        self.parent = parent
+        self.testset = testset
+        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
+
+    def add_child_testset(self, testset):
+        child_testset_stats = self.child_testsets.get(testset.name)
+        if child_testset_stats is None:
+            child_testset_stats = TestsetStats(testset=testset, parent=self)
+            self.child_testsets[testset.name] = child_testset_stats
+
+        for child_testset in testset.testsets:
+            child_testset_stats.add_child_testset(child_testset)
+
+        for test in testset.tests:
+            child_testset_stats.add_child_test(test)
+
+    def add_child_test(self, test):
+        child_test_stats = self.child_tests.get(test.name)
+        if child_test_stats is None:
+            child_test_stats = TestStats(self, test)
+            self.child_tests[test.name] = child_test_stats
+
+        for run in test.runs:
+            child_test_stats.add_child_run(run)
+
+    def dump_table(self, table):
+        # is_empty = True
+        # for stat in self.stats.values():
+        #     if stat != 0:
+        #         is_empty = False
+        # if is_empty:
+        #     return
+
+        if self.testset is not None:
+            table_dump_row(table,
+                self.testset.get_full_name(),
+                '',
+                self.stats['duration'],
+                self.stats['passed'],
+                self.stats['failed'],
+                self.stats['skipped'],
+                self.stats['excluded']
+            )
+
+        for child in self.child_tests.values():
+            child.dump_table(table)
+
+        for child in self.child_testsets.values():
+            child.dump_table(table)
+
+
+
 
 
 class TestRun(object):
@@ -130,25 +252,9 @@ class TestRun(object):
 
         return self.target.name
 
-    def get_stats(self, parent_stats):
-        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
-        self.stats[self.status] += 1
-        self.stats['duration'] = self.duration
-
-        if parent_stats is not None:
-            for key in parent_stats.keys():
-                parent_stats[key] += self.stats[key]
-
-    def dump_table(self, table, dump_name):
-        table_dump_row(table,
-            self.test.get_full_name() if dump_name else '',
-            self.config,
-            self.duration,
-            self.stats['passed'],
-            self.stats['failed'],
-            self.stats['skipped'],
-            self.stats['excluded']
-        )
+    def get_stats(self, stats):
+        stats[self.status] += 1
+        stats['duration'] = self.duration
 
     # Called by worker to execute the test
     def run(self):
@@ -340,8 +446,9 @@ class TestRun(object):
 
 class TestCommon(object):
 
-    def __init__(self, runner, parent, name, path):
+    def __init__(self, runner, parent, name, target, path):
         self.runner = runner
+        self.target = target
         self.name = name
         self.parent = parent
         self.full_name = None
@@ -367,10 +474,8 @@ class TestCommon(object):
     def skip(self, msg):
         self.skipped = msg
 
-    def get_target(self, target_name):
-        if self.parent is not None:
-            return self.parent.get_target(target_name)
-        return None
+    def get_target(self):
+        return self.target
 
     # Called by user to add commands
     def add_command(self, command):
@@ -378,8 +483,8 @@ class TestCommon(object):
 
 
     # Called by runner to enqueue this test to the list of tests ready to be executed
-    def enqueue(self, targets, target=None):
-        run = TestRun(self, target)
+    def enqueue(self):
+        run = TestRun(self, self.target)
         if self.runner.is_skipped(self.get_full_name()) or self.skipped is not None:
             if self.skipped is not None:
                 run.skip_message = self.skipped
@@ -398,48 +503,6 @@ class TestCommon(object):
     def get_full_name(self):
         return self.full_name
 
-
-
-
-
-
-    def get_stats(self, parent_stats):
-        if len(self.runs) == 0:
-            return
-
-        if len(self.runs) == 1:
-            return self.runs[0].get_stats(parent_stats)
-        else:
-            self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
-            for run in self.runs:
-                run.get_stats(self.stats)
-
-            if parent_stats is not None:
-                for key in parent_stats.keys():
-                    parent_stats[key] += self.stats[key]
-
-
-    def dump_table(self, table):
-        if len(self.runs) == 0:
-            return
-
-        if len(self.runs) == 1:
-            self.runs[0].dump_table(table, True)
-        else:
-            table_dump_row(table,
-                self.get_full_name(),
-                '',
-                self.stats['duration'],
-                self.stats['passed'],
-                self.stats['failed'],
-                self.stats['skipped'],
-                self.stats['excluded']
-            )
-
-            for run in self.runs:
-                run.dump_table(table, False)
-
-
     def dump_junit(self, test_file):
         for run in self.runs:
             run.dump_junit(test_file)
@@ -448,8 +511,8 @@ class TestCommon(object):
 
 class TestImpl(testsuite.Test, TestCommon):
 
-    def __init__(self, runner, parent, name, path):
-        TestCommon.__init__(self, runner, parent, name, path)
+    def __init__(self, runner, parent, name, target, path):
+        TestCommon.__init__(self, runner, parent, name, target, path)
         self.runner = runner
         self.name = name
 
@@ -459,8 +522,8 @@ class TestImpl(testsuite.Test, TestCommon):
 
 class MakeTestImpl(testsuite.Test, TestCommon):
 
-    def __init__(self, runner, parent, name, path, flags, checker=None, retval=0):
-        TestCommon.__init__(self, runner, parent, name, path)
+    def __init__(self, runner, parent, name, target, path, flags, checker=None, retval=0):
+        TestCommon.__init__(self, runner, parent, name, target, path)
         self.runner = runner
         self.name = name
         self.flags = flags
@@ -488,8 +551,8 @@ class MakeTestImpl(testsuite.Test, TestCommon):
 
 class SdkTestImpl(testsuite.SdkTest, TestCommon):
 
-    def __init__(self, runner, parent, name, path, flags, checker=None, retval=0):
-        TestCommon.__init__(self, runner, parent, name, path)
+    def __init__(self, runner, parent, name, target, path, flags, checker=None, retval=0):
+        TestCommon.__init__(self, runner, parent, name, target, path)
         self.runner = runner
         self.name = name
         self.flags = flags
@@ -517,8 +580,8 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
 
 class NetlistPowerSdkTestImpl(SdkTestImpl):
 
-    def __init__(self, runner, parent, name, path, flags):
-        SdkTestImpl.__init__(self, runner, parent, name, path, flags)
+    def __init__(self, runner, parent, name, target, path, flags):
+        SdkTestImpl.__init__(self, runner, parent, name, target, path, flags)
 
         self.add_command(testsuite.Shell('power_gen', 'make power_gen %s' % (self.flags)))
         self.add_command(testsuite.Shell('power_copy', 'make power_copy %s' % (self.flags)))
@@ -528,7 +591,7 @@ class NetlistPowerSdkTestImpl(SdkTestImpl):
 
 class TestsetImpl(testsuite.Testset):
 
-    def __init__(self, runner, parent=None, path=None):
+    def __init__(self, runner, target, parent=None, path=None):
         self.runner = runner
         self.name = None
         self.tests = []
@@ -536,14 +599,11 @@ class TestsetImpl(testsuite.Testset):
         self.parent = parent
         self.path = path
         self.targets = {}
+        self.active_targets = []
+        self.target = target
 
-    def get_target(self, target_name):
-        target = self.targets.get(target_name)
-        if target is not None:
-            return target
-        if self.parent is not None:
-            return self.parent.get_target(target_name)
-        return None
+    def get_target(self):
+        return self.target
 
     def get_path(self):
         return self.path
@@ -570,104 +630,60 @@ class TestsetImpl(testsuite.Testset):
 
         return self.name
 
-
     def import_testset(self, file):
         filepath = file
         if self.path is not None:
             filepath = os.path.join(self.path, file)
 
-        self.testsets.append(self.runner.import_testset(filepath, self))
-
+        if len(self.targets) == 0:
+            self.testsets.append(self.runner.import_testset(filepath, self.target, self))
+        else:
+            for target_name in self.runner.get_active_targets():
+                target = self.targets.get(target_name)
+                if target is not None:
+                    self.testsets.append(self.runner.import_testset(filepath, target, self))
 
     def new_testset(self, testset_name):
-        testset = TestsetImpl(self.runner, self, path=self.path)
+        testset = TestsetImpl(self.runner, self.target, self, path=self.path)
         testset.set_name(testset_name)
         self.testsets.append(testset)
 
         return testset
 
 
-    def enqueue(self, targets, target=None):
+    def enqueue(self):
 
-        if len(self.targets) > 0:
-            if targets is not None:
-                for target_name in targets:
-                    target = self.targets.get(target_name)
-                    if target is not None:
-                        for testset in self.testsets:
-                            testset.enqueue(None, target)
+        for testset in self.testsets:
+            testset.enqueue()
 
-                        for test in self.tests:
-                            test.enqueue(None, target)
-        else:
-            for testset in self.testsets:
-                testset.enqueue(targets, target)
-
-            for test in self.tests:
-                test.enqueue(targets, target)
+        for test in self.tests:
+            test.enqueue()
 
 
     def new_test(self, name):
-        test = TestImpl(self.runner, self, name, self.path)
+        test = TestImpl(self.runner, self, name, self.target, self.path)
         if self.runner.is_selected(test):
             self.tests.append(test)
         return test
 
 
     def new_make_test(self, name, flags='', checker=None, retval=0):
-        test = MakeTestImpl(self.runner, self, name, self.path, flags, checker=checker, retval=retval)
+        test = MakeTestImpl(self.runner, self, name, self.target, self.path, flags, checker=checker, retval=retval)
         if self.runner.is_selected(test):
             self.tests.append(test)
         return test
 
     def new_sdk_test(self, name, flags='', checker=None, retval=0):
-        test = SdkTestImpl(self.runner, self, name, self.path, flags, checker=checker, retval=retval)
+        test = SdkTestImpl(self.runner, self, name, self.target, self.path, flags, checker=checker, retval=retval)
         if self.runner.is_selected(test):
             self.tests.append(test)
         return test
 
     def new_sdk_netlist_power_test(self, name, flags=''):
-        test = NetlistPowerSdkTestImpl(self.runner, self, name, self.path, flags)
+        test = NetlistPowerSdkTestImpl(self.runner, self, name, self.target, self.path, flags)
         if self.runner.is_selected(test):
             self.tests.append(test)
         return test
-
-
-    def dump_table(self, table):
-
-        is_empty = True
-        for stat in self.stats.values():
-            if stat != 0:
-                is_empty = False
-        if is_empty:
-            return
-
-        if self.name is not None:
-            table_dump_row(table,
-                self.get_full_name(),
-                '',
-                self.stats['duration'],
-                self.stats['passed'],
-                self.stats['failed'],
-                self.stats['skipped'],
-                self.stats['excluded']
-            )
-
-        for child in self.tests + self.testsets:
-            child.dump_table(table)
-
-
-    def get_stats(self, parent_stats):
-
-        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
-
-        for child in self.tests + self.testsets:
-            child.get_stats(self.stats)
-
-        if parent_stats is not None:
-            for key in parent_stats.keys():
-                parent_stats[key] += self.stats[key]
-
 
     def dump_junit(self, test_file):
         for child in self.testsets + self.tests:
@@ -715,6 +731,9 @@ class Runner():
         self.properties = {}
         self.test_list = test_list
         self.targets = targets
+        self.default_target = Target('default')
+        if self.targets is None:
+            self.targets = [ 'default' ]
         self.cpu_poll_interval = 0.1
         for prop in properties:
           name, value = prop.split('=')
@@ -727,6 +746,9 @@ class Runner():
                     csv_reader = csv.reader(file)
                     for row in csv_reader:
                         self.bench_results[row[0]] = row[1:]
+
+    def get_active_targets(self):
+        return self.targets
 
     def get_property(self, name):
         return self.properties.get(name)
@@ -754,15 +776,15 @@ class Runner():
         self.event.clear()
 
         for testset in self.testsets:
-            testset.enqueue(self.targets)
+            testset.enqueue()
 
         self.check_pending_tests()
 
         self.event.wait()
 
-        self.stats = {'passed': 0, 'failed': 0, 'skipped': 0, 'excluded': 0, 'duration': 0}
+        self.stats = TestsetStats()
         for testset in self.testsets:
-            testset.get_stats(self.stats)
+            self.stats.add_child_testset(testset)
 
         if self.bench_csv_file is not None:
             with open(self.bench_csv_file, 'w') as file:
@@ -783,8 +805,7 @@ class Runner():
         x.align = "r"
         x.align["test"] = "l"
         x.align["config"] = "l"
-        for testset in self.testsets:
-            testset.dump_table(x)
+        self.stats.dump_table(x)
         print()
         print(x)
 
@@ -825,10 +846,10 @@ class Runner():
     def add_testset(self, file):
         if not os.path.isabs(file):
             file = os.path.join(os.getcwd(), file)
-        self.testsets.append(self.import_testset(file))
+        self.testsets.append(self.import_testset(file, self.default_target))
 
 
-    def import_testset(self, file, parent=None):
+    def import_testset(self, file, target, parent=None):
         logging.debug(f"Parsing file (path: {file})")
 
         try:
@@ -838,7 +859,7 @@ class Runner():
         except FileNotFoundError as exc:
             raise RuntimeError(bcolors.FAIL + 'Unable to open test configuration file: ' + file + bcolors.ENDC)
 
-        testset = TestsetImpl(self, parent, path=os.path.dirname(file))
+        testset = TestsetImpl(self, target, parent, path=os.path.dirname(file))
 
         module.testset_build(testset)
 
