@@ -592,6 +592,37 @@ class MakeTestImpl(testsuite.Test, TestCommon):
         self.benchs.append([extract, name, desc])
 
 
+class GvrunTestImpl(testsuite.SdkTest, TestCommon):
+
+    def __init__(self, runner, parent, name, target, path, flags, checker=None, retval=0):
+        TestCommon.__init__(self, runner, parent, name, target, path)
+        self.runner = runner
+        self.name = name
+        self.flags = flags
+        if self.flags is not None:
+            self.flags += ' ' + ' '.join(self.runner.flags)
+        else:
+            self.flags = ' '.join(self.runner.flags)
+
+        platform = self.runner.get_property('platform')
+        if platform is not None:
+            self.flags += ' --platform=%s' % platform
+
+        target = target.get_name()
+        self.flags += f' --build-dir=build/{target}/{self.name}'
+
+        cmd = f'gvrun --target {target} {self.flags}'
+        self.add_command(testsuite.Shell('clean', f'{cmd} clean'))
+        self.add_command(testsuite.Shell('build', f'{cmd} build'))
+        self.add_command(testsuite.Shell('run', f'{cmd} run', retval=retval))
+
+        if checker is not None:
+            self.add_command(testsuite.Checker('check', checker))
+
+    def add_bench(self, extract, name, desc):
+        self.benchs.append([extract, name, desc])
+
+
 class SdkTestImpl(testsuite.SdkTest, TestCommon):
 
     def __init__(self, runner, parent, name, target, path, flags, checker=None, retval=0):
@@ -726,6 +757,12 @@ class TestsetImpl(testsuite.Testset):
             self.tests.append(test)
         return test
 
+
+    def new_gvrun_test(self, name, flags='', checker=None, retval=0):
+        test = GvrunTestImpl(self.runner, self, name, self.target, self.path, flags, checker=checker, retval=retval)
+        if self.runner.is_selected(test):
+            self.tests.append(test)
+        return test
 
     def new_make_test(self, name, flags='', checker=None, retval=0):
         test = MakeTestImpl(self.runner, self, name, self.target, self.path, flags, checker=checker, retval=retval)
