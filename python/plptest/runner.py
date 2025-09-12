@@ -579,7 +579,7 @@ class MakeTestImpl(testsuite.Test, TestCommon):
         if platform is not None:
             self.flags += ' platform=%s' % platform
 
-        self.flags += f' build=build/{runner.get_config()}/{self.name}'
+        self.flags += f' build={path}/build/{runner.get_config()}/{self.name}'
 
         self.add_command(testsuite.Shell('clean', 'make clean %s' % (self.flags)))
         self.add_command(testsuite.Shell('build', 'make build %s' % (self.flags)))
