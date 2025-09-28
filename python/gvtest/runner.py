@@ -18,7 +18,7 @@
 
 import os
 import logging
-import plptest.testsuite as testsuite
+import gvtest.testsuite as testsuite
 import psutil
 import threading
 import queue
@@ -468,7 +468,7 @@ class TestRun(object):
             self.__dump_test_msg(f'--- Shell command: {cmd} ---\n')
 
             if sourceme is not None:
-                cmd = f'plptest_cmd_stub {sourceme} {cmd}'
+                cmd = f'gvtest_cmd_stub {sourceme} {cmd}'
 
             retval = 0 if self.__exec_process(cmd) == command.retval else 1
 

@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 
-import plptest.runner
+import gvtest.runner
 
 
 
@@ -91,7 +91,7 @@ if args.testset is None:
 runner = None
 
 try:
-    runner = plptest.runner.Runner(
+    runner = gvtest.runner.Runner(
         config=args.config, load_average=args.load_average, nb_threads=args.threads,
         properties=args.properties, stdout=args.stdout, safe_stdout=args.safe_stdout,
         max_output_len=args.max_output_len, max_timeout=args.max_timeout, test_list=args.test_list,
