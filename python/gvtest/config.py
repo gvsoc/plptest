@@ -276,6 +276,23 @@ class ConfigLoader:
                             config['targets'].items():
                         if target_cfg is None:
                             target_cfg = {}
+                        else:
+                            # Anchor relative sourceme paths to
+                            # the YAML that defined them. Each
+                            # property belongs to its own source
+                            # file — without this, an inherited
+                            # sourceme from a parent YAML would
+                            # later be resolved against the leaf
+                            # YAML's directory.
+                            target_cfg = dict(target_cfg)
+                            sm = target_cfg.get('sourceme')
+                            if (isinstance(sm, str)
+                                    and '${' not in sm
+                                    and not os.path.isabs(sm)):
+                                target_cfg['sourceme'] = str(
+                                    (config_file.parent / sm)
+                                    .resolve()
+                                )
                         if name in all_defined:
                             all_defined[name].update(
                                 target_cfg

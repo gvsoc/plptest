@@ -417,6 +417,65 @@ class TestTargetsInConfig:
         # Root properties are kept
         assert targets['rv64']['properties']['chip'] == 'rv64'
 
+    def test_relative_sourceme_anchored_to_defining_yaml(self, tmp_path):
+        """A relative sourceme inherited from a parent YAML must
+        resolve against the parent's directory, not against the
+        leaf YAML that re-listed the target name."""
+        root_config = tmp_path / "gvtest.yaml"
+        root_config.write_text(
+            "targets:\n"
+            "  acu.acu:\n"
+            "    sourceme: ./acu_sdk/bin/activate.sh\n"
+        )
+        child = tmp_path / "acu_sdk"
+        child.mkdir()
+        child_config = child / "gvtest.yaml"
+        child_config.write_text(
+            "targets:\n"
+            "  acu.acu:\n"
+            "  acu.acu100_1:\n"
+        )
+        loader = ConfigLoader(str(child))
+        targets = loader.get_targets()
+        expected = str(
+            (tmp_path / 'acu_sdk' / 'bin' / 'activate.sh').resolve()
+        )
+        assert targets['acu.acu']['sourceme'] == expected
+
+    def test_relative_sourceme_in_leaf_yaml(self, tmp_path):
+        """A relative sourceme defined in the leaf YAML resolves
+        against the leaf's own directory."""
+        root_config = tmp_path / "gvtest.yaml"
+        root_config.write_text(
+            "targets:\n"
+            "  rv64: {}\n"
+        )
+        child = tmp_path / "sub"
+        child.mkdir()
+        child_config = child / "gvtest.yaml"
+        child_config.write_text(
+            "targets:\n"
+            "  rv64:\n"
+            "    sourceme: ./setup.sh\n"
+        )
+        loader = ConfigLoader(str(child))
+        targets = loader.get_targets()
+        expected = str((child / 'setup.sh').resolve())
+        assert targets['rv64']['sourceme'] == expected
+
+    def test_envvar_sourceme_left_unresolved(self, tmp_path):
+        """A sourceme containing ${VAR} must not be path-resolved
+        at config load time — env-var expansion happens later."""
+        config = tmp_path / "gvtest.yaml"
+        config.write_text(
+            "targets:\n"
+            "  rv64:\n"
+            "    sourceme: ${SDK}/setup.sh\n"
+        )
+        loader = ConfigLoader(str(tmp_path))
+        targets = loader.get_targets()
+        assert targets['rv64']['sourceme'] == '${SDK}/setup.sh'
+
     def test_child_targets_restrict_scope(self, tmp_path):
         """Child with own targets restricts to those only."""
         root_config = tmp_path / "gvtest.yaml"
