@@ -59,16 +59,20 @@ class TestRunStats(object):
 
     def dump_junit(self, test_file: TextIO) -> None:
         if self.run.status != 'excluded':
+            target_label = self.run.get_target_name()
+            platform = self.run.runner.platform
+            if platform:
+                target_label = f'{target_label}:{platform}'
             fullname = self.run.test.get_full_name()
             if fullname.count(':') == 0:
                 name = fullname
-                classname = self.run.get_target_name()
+                classname = target_label
             elif fullname.count(':') == 1:
                 testsuite, name = fullname.split(':', 1)
-                classname = f'{self.run.get_target_name()}.{testsuite}'
+                classname = f'{target_label}.{testsuite}'
             else:
                 testset, testsuite, name = fullname.split(':', 2)
-                classname = f'{self.run.get_target_name()}.{testsuite}'
+                classname = f'{target_label}.{testsuite}'
             test_file.write(
                 '  <testcase classname="%s" name="%s"'
                 ' time="%f">\n'
