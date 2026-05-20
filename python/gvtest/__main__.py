@@ -158,7 +158,7 @@ parser.add_argument(
     help="Add command to be excluded. Default: %(default)s"
 )
 parser.add_argument("--flags", dest="flags", action="append", default=[], help="Specifies flags")
-parser.add_argument("--platform", dest="platform", default='gvsoc', help="Specifies platform")
+parser.add_argument("--platform", dest="platform", default=None, help="Specifies platform")
 parser.add_argument(
     "--junit-report-path", dest="junit_report_path",
     default='junit-reports', help="Specifies flags"

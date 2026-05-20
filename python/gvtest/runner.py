@@ -193,7 +193,7 @@ class Runner():
         self.test_list: list[str] | None = test_list
         self.target_names: list[str] = targets if targets is not None else ['default']
         self._cli_targets_explicit: bool = targets is not None
-        self.platform: str = platform
+        self.platform: str | None = platform
         # Fallback target for tests that aren't attached to any
         # gvtest.yaml-declared target. Always named 'default' so
         # they report under a neutral label; using the first
@@ -251,7 +251,7 @@ class Runner():
     def get_active_targets(self) -> list[str]:
         return self.target_names
 
-    def get_platform(self) -> str:
+    def get_platform(self) -> str | None:
         return self.platform
 
     def get_property(self, name: str) -> str | None:
@@ -407,7 +407,7 @@ class Runner():
                 'timestamp': _dt.now(_tz.utc).isoformat(),
                 'git_commit': self._get_git_info('rev-parse', 'HEAD'),
                 'git_branch': self._get_git_info('rev-parse', '--abbrev-ref', 'HEAD'),
-                'platform': self.platform,
+                'platform': self.platform or 'gvsoc',
                 'results': self.bench_results,
             }
             self._write_bench_db(report)

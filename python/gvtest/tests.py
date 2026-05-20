@@ -591,7 +591,7 @@ class MakeTestImpl(TestCommon, testsuite.Test):
         else:
             self.flags = ' '.join(self.runner.flags)
 
-        platform: str | None = self.runner.get_property('platform')
+        platform: str | None = self.runner.get_platform()
         if platform is not None:
             self.flags += ' platform=%s' % platform
 
@@ -631,7 +631,7 @@ class GvrunTestImpl(testsuite.SdkTest, TestCommon):
         else:
             self.flags = ' '.join(self.runner.flags)
 
-        platform: str | None = self.runner.get_property('platform')
+        platform: str | None = self.runner.get_platform()
         if platform is not None:
             self.flags += ' --platform=%s' % platform
 
@@ -674,7 +674,7 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         else:
             self.flags = ' '.join(self.runner.flags)
 
-        platform: str | None = self.runner.get_property('platform')
+        platform: str | None = self.runner.get_platform()
         if platform is not None:
             self.flags += ' --platform=%s' % platform
 
