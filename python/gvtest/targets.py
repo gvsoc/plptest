@@ -94,6 +94,21 @@ class Target(object):
             return result
         return None
 
+    def get_container(self) -> dict | None:
+        """Return the normalized container config, or None.
+
+        Declared per target in gvtest.yaml under the
+        ``container`` key; when set, every test command of
+        this target runs inside that container.
+        """
+        cfg = self.config.get('container')
+        if cfg is None:
+            return None
+        from gvtest.container import normalize_container_config
+        return normalize_container_config(
+            cfg, getattr(self, 'config_dir', None)
+        )
+
     def format_properties(self, str: str) -> str:
         properties = self.config.get('properties')
         if properties is None:

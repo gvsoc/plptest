@@ -200,6 +200,49 @@ class ConfigLoader:
                         f"expected a mapping or null, got "
                         f"{type(target_cfg).__name__}"
                     )
+                if target_cfg is not None and \
+                        'container' in target_cfg:
+                    self._validate_container(
+                        target_cfg['container'], name,
+                        config_file
+                    )
+
+    def _validate_container(
+        self, container, target_name: str,
+        config_file: Path
+    ) -> None:
+        """Validate a target's ``container`` sub-config."""
+        prefix = (
+            f"Invalid 'container' config for target "
+            f"'{target_name}' in {config_file}: "
+        )
+        if not isinstance(container, dict):
+            raise RuntimeError(
+                prefix + "expected a mapping, got "
+                f"{type(container).__name__}"
+            )
+        image = container.get('image')
+        if not isinstance(image, str) or image == '':
+            raise RuntimeError(
+                prefix + "'image' is required and must be "
+                "a string"
+            )
+        if 'cmd' in container and \
+                not isinstance(container['cmd'], str):
+            raise RuntimeError(
+                prefix + "'cmd' must be a string"
+            )
+        for key in ('args', 'volumes'):
+            value = container.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, list) or \
+                    not all(isinstance(v, str)
+                            for v in value):
+                raise RuntimeError(
+                    prefix + f"'{key}' must be a list "
+                    "of strings"
+                )
     
     def resolve_paths(self, paths: List[str], config_file: Path) -> List[str]:
         """

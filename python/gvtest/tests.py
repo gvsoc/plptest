@@ -58,6 +58,8 @@ class TestRun(object):
 
         self.sourceme: str | None = None
         self.envvars: dict[str, str] | None = None
+        self.container: dict | None = None
+        self.current_container_name: str | None = None
         self.skip_message: str = ""
         self.status: str = "failed"
         self.finished: bool = False
@@ -72,6 +74,7 @@ class TestRun(object):
         if self.target is not None:
             self.sourceme = self.target.get_sourceme()
             self.envvars = self.target.get_envvars()
+            self.container = self.target.get_container()
 
     def get_target_name(self) -> str:
         if self.target is None:
@@ -206,6 +209,16 @@ class TestRun(object):
     def kill(self) -> None:
         self.lock.acquire()
         self.timeout_reached = True
+        if self.current_container_name is not None and \
+                self.container is not None:
+            # Kill the container first: killing the podman
+            # client alone does not reliably stop the
+            # container (conmon detaches from the client).
+            from gvtest.container import kill_container
+            kill_container(
+                self.container['cmd'],
+                self.current_container_name
+            )
         if self.current_proc is not None:
             try:
                 # Kill the entire process group (created by
@@ -295,9 +308,13 @@ class TestRun(object):
         else:
             _console.print(msg)
 
-    def __exec_process(self, command: str, envvars: dict[str, str] | None = None) -> int:
+    def __exec_process(
+        self, command: str | list[str],
+        envvars: dict[str, str] | None = None
+    ) -> int:
         self.lock.acquire()
         if self.timeout_reached:
+            self.lock.release()
             return -1
 
         env: dict[str, str] = os.environ.copy()
@@ -309,11 +326,14 @@ class TestRun(object):
         # The new session prevents child processes from
         # corrupting the parent terminal (SDL2/ncurses),
         # and os.killpg() can kill the whole group.
+        # Container commands come as an argv list and are
+        # run without a shell.
         proc: subprocess.Popen[bytes] = subprocess.Popen(
             command, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            shell=True, cwd=self.test.path, env=env,
+            shell=isinstance(command, str),
+            cwd=self.test.path, env=env,
             start_new_session=True
         )
 
@@ -361,10 +381,29 @@ class TestRun(object):
 
             self.__dump_test_msg(f'--- Shell command: {cmd} ---\n')
 
-            if sourceme is not None:
-                cmd = f'gvtest_cmd_stub {sourceme} {cmd}'
+            if self.container is not None:
+                # Containerized: sourceme is inlined and
+                # envvars go through -e flags — the host
+                # environment does not cross the boundary.
+                from gvtest.container import (
+                    build_container_shell_cmd,
+                )
+                argv, name = build_container_shell_cmd(
+                    self.container, cmd,
+                    self.test.path or os.getcwd(),
+                    sourceme, envvars
+                )
+                self.current_container_name = name
+                try:
+                    status = self.__exec_process(argv)
+                finally:
+                    self.current_container_name = None
+                retval: int = 0 if status == command.retval else 1
+            else:
+                if sourceme is not None:
+                    cmd = f'gvtest_cmd_stub {sourceme} {cmd}'
 
-            retval: int = 0 if self.__exec_process(cmd, envvars) == command.retval else 1
+                retval = 0 if self.__exec_process(cmd, envvars) == command.retval else 1
 
         elif type(command) == testsuite.Checker:
             self.__dump_test_msg(f'--- Checker command ---\n')

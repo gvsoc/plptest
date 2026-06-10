@@ -536,3 +536,58 @@ class TestTargetsInConfig:
         loader = ConfigLoader(str(tmp_path))
         with pytest.raises(RuntimeError, match="expected a mapping"):
             loader.get_targets()
+
+
+class TestContainerInConfig:
+    """Tests for the container key in target configs."""
+
+    def test_valid_container(self, tmp_path):
+        config = tmp_path / "gvtest.yaml"
+        config.write_text(
+            "targets:\n"
+            "  rv64:\n"
+            "    container:\n"
+            "      image: ubuntu:22.04\n"
+            "      volumes:\n"
+            "        - ..\n"
+        )
+        loader = ConfigLoader(str(tmp_path))
+        targets = loader.get_targets()
+        assert targets['rv64']['container']['image'] == \
+            'ubuntu:22.04'
+
+    def test_container_missing_image(self, tmp_path):
+        config = tmp_path / "gvtest.yaml"
+        config.write_text(
+            "targets:\n"
+            "  rv64:\n"
+            "    container:\n"
+            "      cmd: podman\n"
+        )
+        loader = ConfigLoader(str(tmp_path))
+        with pytest.raises(RuntimeError, match="image"):
+            loader.get_targets()
+
+    def test_container_not_a_mapping(self, tmp_path):
+        config = tmp_path / "gvtest.yaml"
+        config.write_text(
+            "targets:\n"
+            "  rv64:\n"
+            "    container: ubuntu:22.04\n"
+        )
+        loader = ConfigLoader(str(tmp_path))
+        with pytest.raises(RuntimeError, match="mapping"):
+            loader.get_targets()
+
+    def test_container_bad_volumes(self, tmp_path):
+        config = tmp_path / "gvtest.yaml"
+        config.write_text(
+            "targets:\n"
+            "  rv64:\n"
+            "    container:\n"
+            "      image: img\n"
+            "      volumes: /not/a/list\n"
+        )
+        loader = ConfigLoader(str(tmp_path))
+        with pytest.raises(RuntimeError, match="volumes"):
+            loader.get_targets()
