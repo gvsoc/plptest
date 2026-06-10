@@ -110,7 +110,13 @@ class Testset(object, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def import_pytest(
-        self, path: str, pytest_exe: str = 'pytest'
+        self, path: str, pytest_exe: str = 'pytest',
+        markers: str | None = None,
+        pytest_args: list | None = None,
+        xdist: int = 0,
+        batch_timeout: int | None = None,
+        strict: bool = False,
+        batch_exe: str | None = None
     ) -> None: pass
 
     @abc.abstractmethod

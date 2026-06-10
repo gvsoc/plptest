@@ -213,7 +213,13 @@ class TestsetImpl(testsuite.Testset):
 
 
     def import_pytest(
-        self, path: str, pytest_exe: str = 'pytest'
+        self, path: str, pytest_exe: str = 'pytest',
+        markers: str | None = None,
+        pytest_args: list | None = None,
+        xdist: int = 0,
+        batch_timeout: int | None = None,
+        strict: bool = False,
+        batch_exe: str | None = None
     ) -> None:
         """Import pytest tests from a directory or file.
 
@@ -224,6 +230,24 @@ class TestsetImpl(testsuite.Testset):
         Args:
             path: Directory or file containing pytest tests.
             pytest_exe: Pytest executable (default: pytest).
+            markers: ``-m`` marker expression applied to both
+                collection and the batch run.
+            pytest_args: Extra arguments appended to the
+                batch pytest command.
+            xdist: Parallel workers for the batch
+                (``pytest-xdist`` ``-n``). -1 follows the
+                gvtest ``--threads`` option (one worker per
+                CPU by default); 0 disables xdist; a
+                positive value is used as-is.
+            batch_timeout: Timeout in seconds for the whole
+                batch; overrides the runner ``--max-timeout``.
+            strict: Raise an error when collection fails or
+                discovers no tests, instead of silently
+                creating an empty testset.
+            batch_exe: Executable for the run phase only
+                (e.g. ``flock <file> pytest`` to serialize
+                concurrent batches); discovery keeps using
+                pytest_exe. Defaults to pytest_exe.
         """
         if not os.path.isabs(path):
             if self.path is not None:
@@ -243,7 +267,10 @@ class TestsetImpl(testsuite.Testset):
         pt = PytestTestset(
             self.runner, self, name, self.target,
             os.path.dirname(pytest_path) or os.getcwd(),
-            pytest_path, pytest_exe
+            pytest_path, pytest_exe,
+            markers=markers, pytest_args=pytest_args,
+            xdist=xdist, batch_timeout=batch_timeout,
+            strict=strict, batch_exe=batch_exe
         )
         pt.discover()
         self.testsets.append(pt)

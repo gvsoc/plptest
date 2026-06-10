@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -57,46 +60,123 @@ def _build_pytest_cmd(
     return parts + args
 
 
+def _shell_join(cmd: list[str]) -> str:
+    """Join an argv into a shell-safe command string."""
+    return ' '.join(shlex.quote(c) for c in cmd)
+
+
+# Per-test result lines in pytest verbose output, used to
+# report results live while the batch is still running:
+#   with xdist:  "[gw0] [ 20%] PASSED path::test[param]"
+#   without:     "path::test[param] PASSED [ 20%]"
+_LIVE_RESULT_RE = re.compile(
+    r'^\[gw\d+\]\s+\[\s*\d+%\]\s+'
+    r'(?P<status1>PASSED|FAILED|ERROR|SKIPPED|XPASS|XFAIL)'
+    r'\s+(?P<node1>\S+)'
+    r'|^(?P<node2>\S+::\S+)\s+'
+    r'(?P<status2>PASSED|FAILED|ERROR|SKIPPED|XPASS|XFAIL)\b'
+)
+
+_LIVE_STATUS = {
+    'PASSED': 'passed',
+    'XPASS': 'passed',
+    'FAILED': 'failed',
+    'ERROR': 'failed',
+    'SKIPPED': 'skipped',
+    'XFAIL': 'skipped',
+}
+
+
+def _live_match_to_result(
+    match: re.Match
+) -> tuple[str, str]:
+    """Extract (status, node_id) from a live result line."""
+    status = match.group('status1') or \
+        match.group('status2')
+    node_id = match.group('node1') or match.group('node2')
+    return _LIVE_STATUS[status], node_id
+
+
+def _to_text(value: str | bytes | None) -> str:
+    """Normalize subprocess output that may be str, bytes
+    or None (TimeoutExpired yields either depending on the
+    text mode)."""
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        return value.decode(errors='replace')
+    return value
+
+
 def discover_pytest_tests(
-    path: str, pytest_exe: str = 'pytest'
-) -> tuple[list[str], str]:
+    path: str, pytest_exe: str = 'pytest',
+    markers: str | None = None,
+    target: Any | None = None,
+) -> tuple[list[str], str, int, str]:
     """Run pytest --collect-only to discover test node IDs.
 
     Args:
         path: Directory or file to discover tests in.
         pytest_exe: Pytest executable name/path.
+        markers: Optional ``-m`` marker expression, applied
+            at collection so node ids match the batch run.
+        target: Optional Target; its container, sourceme and
+            envvars wrap the collection command so discovery
+            sees the same environment as the batch run.
 
     Returns:
-        Tuple of (node_ids, resolved_exe). The resolved_exe
-        may differ from pytest_exe if a fallback was used.
+        Tuple of (node_ids, resolved_exe, returncode,
+        stderr). The resolved_exe may differ from pytest_exe
+        if a fallback was used.
     """
-    cmd = _build_pytest_cmd(
-        pytest_exe, ['--collect-only', '-q', path]
+    cwd = os.path.dirname(path) or '.'
+    # Force the rootdir to the execution directory: pytest
+    # prints node ids relative to its rootdir (e.g. where a
+    # pytest.ini lives), but the batch run resolves them
+    # relative to its cwd — pin both to the same directory.
+    args = ['--collect-only', '-q', f'--rootdir={cwd}']
+    if markers is not None:
+        args += ['-m', markers]
+    args.append(path)
+    cmd = _build_pytest_cmd(pytest_exe, args)
+
+    container = (
+        target.get_container() if target is not None
+        else None
     )
+    if container is not None:
+        from gvtest.container import (
+            build_container_shell_cmd,
+        )
+        cmd, _ = build_container_shell_cmd(
+            container, _shell_join(cmd), cwd,
+            target.get_sourceme(), target.get_envvars()
+        )
+
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True, text=True, timeout=60,
-            cwd=os.path.dirname(path) or '.'
+            capture_output=True, text=True, timeout=300,
+            cwd=cwd
         )
     except FileNotFoundError:
         # Try fallback: use current Python interpreter
-        if pytest_exe == 'pytest':
+        if pytest_exe == 'pytest' and container is None:
             fallback = f'{sys.executable} -m pytest'
             logger.debug(
                 "'pytest' not found in PATH, trying "
                 f"'{fallback}'"
             )
             return discover_pytest_tests(
-                path, fallback
+                path, fallback, markers, target
             )
         logger.error(
             f"pytest executable '{pytest_exe}' not found"
         )
-        return [], pytest_exe
+        return [], pytest_exe, -1, 'executable not found'
     except subprocess.TimeoutExpired:
         logger.error("pytest --collect-only timed out")
-        return [], pytest_exe
+        return [], pytest_exe, -1, 'collection timed out'
 
     node_ids: list[str] = []
     for line in result.stdout.splitlines():
@@ -109,7 +189,8 @@ def discover_pytest_tests(
     logger.debug(
         f"Discovered {len(node_ids)} pytest tests in {path}"
     )
-    return node_ids, pytest_exe
+    return node_ids, pytest_exe, result.returncode, \
+        result.stderr
 
 
 class PytestTestRun(TestRun):
@@ -120,6 +201,7 @@ class PytestTestRun(TestRun):
         self, test: TestCommon, target: Any | None
     ) -> None:
         super().__init__(test, target)
+        self._result_set = threading.Event()
 
     def run(self) -> None:
         """Not used — results are set directly by the
@@ -134,6 +216,7 @@ class PytestTestRun(TestRun):
         self.status = status
         self.output = output
         self.duration = duration
+        self._result_set.set()
 
 
 class PytestTest(TestCommon):
@@ -166,7 +249,13 @@ class PytestTestset:
         self, runner: Any, parent: Any | None,
         name: str, target: Any | None,
         path: str, pytest_path: str,
-        pytest_exe: str = 'pytest'
+        pytest_exe: str = 'pytest',
+        markers: str | None = None,
+        pytest_args: list[str] | None = None,
+        xdist: int = 0,
+        batch_timeout: int | None = None,
+        strict: bool = False,
+        batch_exe: str | None = None
     ) -> None:
         self.runner: Any = runner
         self.parent: Any | None = parent
@@ -175,8 +264,19 @@ class PytestTestset:
         self.path: str = path
         self.pytest_path: str = pytest_path
         self.pytest_exe: str = pytest_exe
+        # Executable for the run phase only (e.g. wrapped in
+        # a lock); discovery keeps using pytest_exe
+        self.batch_exe: str | None = batch_exe
+        self.markers: str | None = markers
+        self.pytest_args: list[str] = pytest_args or []
+        self.xdist: int = xdist
+        self.batch_timeout: int | None = batch_timeout
+        self.strict: bool = strict
         self.tests: list[PytestTest] = []
         self.testsets: list[Any] = []
+        # node ids whose result was already reported live
+        # from the batch output (printed + terminated)
+        self._finalized: set[str] = set()
 
     def get_full_name(self) -> str | None:
         if self.parent is not None:
@@ -188,9 +288,18 @@ class PytestTestset:
     def discover(self) -> None:
         """Discover pytest tests and create PytestTest
         entries."""
-        node_ids, resolved_exe = discover_pytest_tests(
-            self.pytest_path, self.pytest_exe
-        )
+        node_ids, resolved_exe, returncode, stderr = \
+            discover_pytest_tests(
+                self.pytest_path, self.pytest_exe,
+                self.markers, self.target
+            )
+        if self.strict and (returncode != 0 or not node_ids):
+            raise RuntimeError(
+                f"pytest collection failed in "
+                f"{self.pytest_path} (exit {returncode}, "
+                f"{len(node_ids)} tests collected):\n"
+                f"{stderr}"
+            )
         # Use the resolved executable (may be fallback)
         self.pytest_exe = resolved_exe
         for node_id in node_ids:
@@ -222,9 +331,34 @@ class PytestTestset:
         components = [basename] + rest
         return ':'.join(components)
 
+    def _effective_xdist(self) -> int:
+        """Resolve the xdist worker count.
+
+        -1 follows gvtest's --threads option (whose own
+        0/auto default is one worker per CPU); 0 disables
+        xdist; a positive value is used as-is.
+        """
+        if self.xdist >= 0:
+            return self.xdist
+        # Runner.start() resolves nb_threads=0 (auto) to the
+        # CPU count before tests are enqueued
+        nb_threads = getattr(self.runner, 'nb_threads', 0)
+        if nb_threads > 0:
+            return nb_threads
+        return os.cpu_count() or 1
+
+    def _has_visible_descendants(self) -> bool:
+        """True if any test survives --target filtering."""
+        for test in self.tests:
+            if not test._is_filtered_by_cli_target():
+                return True
+        return False
+
     def dump_tests(
         self, rows: dict[str, dict], indent_level: int = 0
     ) -> None:
+        if not self._has_visible_descendants():
+            return
         key = self.get_full_name() or self.name
         entry = rows.get(key)
         if entry is None:
@@ -310,9 +444,16 @@ class PytestTestset:
         # Collect node IDs
         node_ids = [t.node_id for t in active_tests]
 
-        # Create temp file for JUnit XML
+        run0 = active_tests[0].runs[-1]
+        assert isinstance(run0, PytestTestRun)
+        container = run0.container
+
+        # Create temp file for JUnit XML. With a container,
+        # the file must live inside the workspace mount —
+        # the host /tmp is not visible from the container.
         xml_fd, xml_path = tempfile.mkstemp(
-            suffix='.xml', prefix='gvtest_pytest_'
+            suffix='.xml', prefix='gvtest_pytest_',
+            dir=self.path if container is not None else None
         )
         os.close(xml_fd)
 
@@ -320,29 +461,54 @@ class PytestTestset:
             # Build pytest command
             # -o junit_logging=all captures print() output
             # in the JUnit XML system-out section
+            args = [
+                f'--junit-xml={xml_path}',
+                f'--rootdir={self.path}',
+                '-v', '--tb=short',
+                '-o', 'junit_logging=all',
+            ]
+            if self.markers is not None:
+                args += ['-m', self.markers]
+            xdist = self._effective_xdist()
+            if xdist > 0:
+                args += ['-n', str(xdist)]
+            args += self.pytest_args
             cmd = _build_pytest_cmd(
-                self.pytest_exe,
-                [
-                    f'--junit-xml={xml_path}',
-                    '-v', '--tb=short',
-                    '-o', 'junit_logging=all',
-                ]
-                + node_ids
+                self.batch_exe or self.pytest_exe,
+                args + node_ids
             )
 
             # Build environment with target's sourceme
             # and envvars
             env = os.environ.copy()
-            run0 = active_tests[0].runs[-1]
-            assert isinstance(run0, PytestTestRun)
+            container_name: str | None = None
 
-            sourceme_prefix = ''
-            if run0.sourceme:
-                sourceme_prefix = (
-                    f'source {run0.sourceme} && '
+            if container is not None:
+                # Containerized: sourceme is inlined and
+                # envvars are passed with -e by the
+                # container helper.
+                from gvtest.container import (
+                    build_container_shell_cmd,
+                    kill_container,
                 )
-            if run0.envvars:
-                env.update(run0.envvars)
+                argv, container_name = \
+                    build_container_shell_cmd(
+                        container, _shell_join(cmd),
+                        self.path, run0.sourceme,
+                        run0.envvars
+                    )
+            else:
+                sourceme_prefix = ''
+                if run0.sourceme:
+                    sourceme_prefix = (
+                        f'source {run0.sourceme} && '
+                    )
+                if run0.envvars:
+                    env.update(run0.envvars)
+                argv = [
+                    'bash', '-c',
+                    f'{sourceme_prefix}{_shell_join(cmd)}'
+                ]
 
             # Print start messages
             for test in active_tests:
@@ -352,37 +518,96 @@ class PytestTestset:
 
             start_time = datetime.now()
 
-            # Run pytest
-            full_cmd = (
-                f'{sourceme_prefix}'
-                f'{" ".join(cmd)}'
-            )
-            logger.debug(f"Running pytest batch: {full_cmd}")
+            logger.debug(f"Running pytest batch: {argv}")
 
-            try:
-                result = subprocess.run(
-                    ['bash', '-c', full_cmd],
-                    capture_output=True, text=True,
-                    env=env, cwd=self.path,
-                    timeout=self.runner.max_timeout
+            timeout = self.batch_timeout
+            if timeout is None:
+                timeout = (
+                    self.runner.max_timeout
                     if self.runner.max_timeout != -1
                     else None
                 )
-                batch_output = result.stdout + result.stderr
-            except subprocess.TimeoutExpired as e:
-                batch_output = (
-                    (e.stdout or b'').decode() +
-                    (e.stderr or b'').decode() +
-                    '\n--- Timeout reached ---\n'
+
+            proc = subprocess.Popen(
+                argv, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True, errors='replace',
+                env=env, cwd=self.path,
+                start_new_session=True
+            )
+
+            timed_out = threading.Event()
+
+            def _kill_batch() -> None:
+                timed_out.set()
+                if container_name is not None:
+                    kill_container(
+                        container['cmd'], container_name
+                    )
+                try:
+                    os.killpg(
+                        os.getpgid(proc.pid),
+                        signal.SIGKILL
+                    )
+                except Exception:
+                    pass
+
+            timer: threading.Timer | None = None
+            if timeout is not None:
+                timer = threading.Timer(
+                    timeout, _kill_batch
                 )
+                timer.start()
+
+            # Stream pytest's verbose output: report each
+            # test as soon as its PASSED/FAILED line shows
+            # up instead of waiting for the whole batch.
+            # The JUnit XML parsed afterwards remains the
+            # authoritative source for status, output and
+            # duration.
+            node_to_run = {
+                t.node_id: t.runs[-1] for t in active_tests
+            }
+            output_lines: list[str] = []
+            try:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    output_lines.append(line)
+                    if self.runner.stdout:
+                        print(line, end='')
+                    match = _LIVE_RESULT_RE.search(line)
+                    if match is None:
+                        continue
+                    status, node_id = (
+                        _live_match_to_result(match)
+                    )
+                    run = node_to_run.get(node_id)
+                    if (run is None or
+                            node_id in self._finalized):
+                        continue
+                    assert isinstance(run, PytestTestRun)
+                    run.set_result(status, '', 0)
+                    run.print_end_message()
+                    self.runner.terminate(run)
+                    self._finalized.add(node_id)
+                proc.wait()
+            finally:
+                if timer is not None:
+                    timer.cancel()
+
+            batch_output = ''.join(output_lines)
+
+            if timed_out.is_set():
+                batch_output += '\n--- Timeout reached ---\n'
                 for test in active_tests:
+                    if test.node_id in self._finalized:
+                        continue
                     run = test.runs[-1]
                     assert isinstance(run, PytestTestRun)
                     run.set_result(
                         "failed", batch_output, 0
                     )
-                    run.print_end_message()
-                    self.runner.terminate(run)
                 return
 
             total_duration = (
@@ -402,7 +627,8 @@ class PytestTestset:
             except OSError:
                 pass
 
-            # Print results and finalize
+            # Print results and finalize the tests that did
+            # not get a live result line
             for test in active_tests:
                 run = test.runs[-1]
                 assert isinstance(run, PytestTestRun)
@@ -411,8 +637,9 @@ class PytestTestset:
                     or self.runner.safe_stdout
                 ):
                     print(run.output)
-                run.print_end_message()
-                self.runner.terminate(run)
+                if test.node_id not in self._finalized:
+                    run.print_end_message()
+                    self.runner.terminate(run)
 
     def _parse_results(
         self, xml_path: str,
@@ -430,8 +657,10 @@ class PytestTestset:
             root = tree.getroot()
         except Exception as e:
             logger.error(f"Failed to parse JUnit XML: {e}")
-            # All tests failed
+            # All tests without a live result failed
             for test in active_tests:
+                if test.node_id in self._finalized:
+                    continue
                 run = test.runs[-1]
                 assert isinstance(run, PytestTestRun)
                 run.set_result(
