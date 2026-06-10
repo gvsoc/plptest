@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 
 import pytest
 
@@ -170,16 +171,17 @@ class TestStrictMode:
 
 class FakePopen:
     """Stub for the batch pytest process: replays canned
-    stdout lines and writes an empty JUnit XML."""
+    stdout lines and writes a canned JUnit XML."""
 
     stdout_text = ''
+    xml_text = '<testsuites></testsuites>'
 
     def __init__(self, cmd, **kwargs):
         FakePopen.captured['cmd'] = cmd
         match = re.search(r'--junit-xml=(\S+)', cmd[-1])
         if match:
             with open(match.group(1), 'w') as f:
-                f.write('<testsuites></testsuites>')
+                f.write(FakePopen.xml_text)
         self.stdout = io.StringIO(FakePopen.stdout_text)
         self.pid = os.getpid()
         self.returncode = 0
@@ -194,10 +196,13 @@ class TestBatchCommand:
 
     def _run_batch_capture(
         self, monkeypatch, tmp_path,
-        batch_stdout='', nb_threads=0, **kwargs
+        batch_stdout='',
+        batch_xml='<testsuites></testsuites>',
+        nb_threads=0, **kwargs
     ):
         FakePopen.captured = {}
         FakePopen.stdout_text = batch_stdout
+        FakePopen.xml_text = batch_xml
 
         runner = Runner(
             properties=[], flags=[], nb_threads=nb_threads
@@ -229,9 +234,15 @@ class TestBatchCommand:
 
         ts.enqueue()
         # enqueue launches a daemon thread; wait for the
-        # result to be set
+        # batch to fully finish (pending count back to 0 —
+        # results may be set live before the XML is parsed)
         run = ts.tests[0].runs[-1]
         assert run._result_set.wait(timeout=10)
+        for _ in range(1000):
+            if runner.nb_pending_tests == 0:
+                break
+            time.sleep(0.01)
+        assert runner.nb_pending_tests == 0
         FakePopen.captured['timers'] = timers
         return FakePopen.captured, run
 
@@ -331,3 +342,26 @@ class TestBatchCommand:
             ),
         )
         assert run.status == 'failed'
+
+    def test_live_result_still_gets_xml_output(
+        self, monkeypatch, tmp_path
+    ):
+        # A live-reported test must still receive its output
+        # and duration from the JUnit XML parsed at the end
+        # of the batch (regression: terminating at live time
+        # let the runner exit before the XML parse)
+        _, run = self._run_batch_capture(
+            monkeypatch, tmp_path,
+            batch_stdout=(
+                'test_a.py::test_x PASSED [100%]\n'
+            ),
+            batch_xml=(
+                '<testsuite><testcase classname="test_a" '
+                'name="test_x" time="2.5">'
+                '<system-out>the gvsoc command line'
+                '</system-out></testcase></testsuite>'
+            ),
+        )
+        assert run.status == 'passed'
+        assert 'the gvsoc command line' in run.output
+        assert run.duration == 2.5

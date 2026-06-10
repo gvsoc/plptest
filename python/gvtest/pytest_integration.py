@@ -587,9 +587,13 @@ class PytestTestset:
                             node_id in self._finalized):
                         continue
                     assert isinstance(run, PytestTestRun)
+                    # Report live but do NOT terminate yet:
+                    # terminating the last pending test lets
+                    # the runner exit while this thread is
+                    # still parsing the JUnit XML for the
+                    # output and duration
                     run.set_result(status, '', 0)
                     run.print_end_message()
-                    self.runner.terminate(run)
                     self._finalized.add(node_id)
                 proc.wait()
             finally:
@@ -608,7 +612,7 @@ class PytestTestset:
                     run.set_result(
                         "failed", batch_output, 0
                     )
-                return
+                return  # the finally block finalizes
 
             total_duration = (
                 datetime.now() - start_time
@@ -627,8 +631,11 @@ class PytestTestset:
             except OSError:
                 pass
 
-            # Print results and finalize the tests that did
-            # not get a live result line
+            # Print results and finalize. Tests that got a
+            # live result line were already announced; all
+            # tests are terminated here, after the XML parse,
+            # so the runner cannot exit before outputs and
+            # durations are filled in.
             for test in active_tests:
                 run = test.runs[-1]
                 assert isinstance(run, PytestTestRun)
@@ -639,7 +646,7 @@ class PytestTestset:
                     print(run.output)
                 if test.node_id not in self._finalized:
                     run.print_end_message()
-                    self.runner.terminate(run)
+                self.runner.terminate(run)
 
     def _parse_results(
         self, xml_path: str,
