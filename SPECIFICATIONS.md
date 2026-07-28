@@ -387,11 +387,15 @@ Standard JUnit XML format for CI/CD integration:
 
 The framework can extract benchmark results from test output:
 
-- **Pattern matching**: Uses regex to extract benchmark values from stdout
-- **CSV export**: Can export results to CSV files (`--bench-csv-file`)
-- **Custom patterns**: Configurable regex patterns (`--bench-regexp`)
-
-Default benchmark pattern: `.*@BENCH@(.*)@DESC@(.*)@`
+- **Pattern matching**: `add_bench(name, extract, desc)` declares a regex
+  whose group(1) is extracted from stdout as the metric value
+- **References**: optional `ref=`, `tol=`/`tol_pct=` record a reference
+  value and tolerance next to each measured value; a reference requires a
+  `ref_type=` describing what it is — one of `rtl`, `analytical`,
+  `measured` (validated against `testsuite.REF_TYPES`)
+- **SQLite export**: `--bench-db FILE` stores results per run/test/target
+- **Reports**: `python -m gvtest.bench.report` (trends over time) and
+  `python -m gvtest.bench.calibration` (measured vs reference)
 
 ### 7. Command Line Interface
 
@@ -499,8 +503,8 @@ gvtest --target rv64 --config debug
 # Generate JUnit report only
 gvtest junit --junit-report-path ./reports
 
-# Run with benchmark extraction
-gvtest --bench-csv-file results.csv
+# Run with benchmark extraction into the bench DB
+gvtest --bench-db bench.sqlite
 
 # Run with verbose output and no failure tolerance
 gvtest --verbose --no-fail --stdout
@@ -581,8 +585,9 @@ test.add_command(Call('step2', my_callback_function))
 # Add checker
 test.add_command(Checker('validate', validation_func, arg1, arg2))
 
-# Add benchmark extraction
-test.add_bench(r'Cycles: (\d+)', 'cycles', 'CPU cycles count')
+# Add benchmark extraction (optionally with a reference for calibration)
+test.add_bench('cycles', r'Cycles: (\d+)', 'CPU cycles count')
+test.add_bench('cycles', r'Cycles: (\d+)', ref=100, tol_pct=5, ref_type='rtl')
 ```
 
 ## Installation

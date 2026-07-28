@@ -27,6 +27,7 @@ does not execute or schedule any test.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any
 
@@ -58,7 +59,7 @@ def _test_entry(test: TestCommon, testset: TestsetImpl) -> dict[str, Any]:
         'testset': testset.get_full_name(),
         'kind': type(test).__name__,
         'commands': [_command_entry(c) for c in test.commands],
-        'benchs': [list(b) for b in test.benchs],
+        'benchs': [dataclasses.asdict(b) for b in test.benchs],
     }
 
 

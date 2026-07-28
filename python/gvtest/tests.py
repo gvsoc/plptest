@@ -43,6 +43,45 @@ from rich.table import Table
 _console = Console(highlight=False, stderr=True)
 
 
+def check_benchs(test: Any, output: str, *args: Any, **kwargs: Any) -> tuple:
+    """Checker: fail when a declared bench is out of tolerance or missing.
+
+    Auto-added to a test by the first `add_bench` that carries both a
+    reference and a tolerance (see `TestCommon._append_bench`). It re-parses
+    the test output for every such bench and fails the test — through the
+    normal command path — if any measured value falls outside `ref ± tol`
+    or the metric produced no measurement at all. Benches with a reference
+    but no tolerance are report-only and ignored here. The comparison
+    (`abs(value - ref) <= tol`) matches the calibration report's severity
+    rule, so a run and its report agree.
+
+    `test` is the TestRun. Honors `runner.bench_check` so `--no-bench-check`
+    turns gating off.
+    """
+    if not getattr(test.runner, 'bench_check', True):
+        return (True, None)
+    failures = []
+    for bench in test.test.benchs:
+        if bench.ref is None or bench.tol is None:
+            continue
+        pattern = re.compile(bench.extract)
+        matched = False
+        for line in output.splitlines():
+            result = pattern.match(line)
+            if result is not None:
+                matched = True
+                value = float(result.group(1))
+                if abs(value - bench.ref) > bench.tol:
+                    failures.append(
+                        f'{bench.name}: {value:g} outside '
+                        f'{bench.ref:g} ± {bench.tol:g}')
+        if not matched:
+            failures.append(f'{bench.name}: no measurement in output')
+    if failures:
+        return (False, 'Bench check failed:\n  ' + '\n  '.join(failures))
+    return (True, None)
+
+
 class TestRun(object):
 
     def __init__(self, test: TestCommon, target: Any | None) -> None:
@@ -188,23 +227,53 @@ class TestRun(object):
             print (self.output)
 
         for bench in self.test.benchs:
-            pattern = re.compile(bench[0])
+            pattern = re.compile(bench.extract)
             for line in self.output.splitlines():
                 result = pattern.match(line)
                 if result is not None:
                     value = float(result.group(1))
-                    name = bench[1]
-                    desc = bench[2]
                     self.runner.register_bench_result(
-                        name, value, desc,
-                        test_name=self.test.get_full_name() or '',
+                        test=self.test.get_full_name() or '',
                         target=self.get_target_name(),
+                        metric=bench.name,
+                        value=value,
+                        description=bench.desc,
+                        ref=bench.ref,
+                        tol=bench.tol,
+                        ref_type=bench.ref_type,
                     )
 
 
         self.print_end_message()
 
         self.runner.terminate(self)
+
+    def register_bench(
+        self, metric: str, value: float, description: str = '',
+        ref: float | None = None,
+        tol: float | None = None,
+        ref_type: str | None = None,
+        value_min: float | None = None,
+        value_max: float | None = None,
+    ) -> None:
+        """Record a benchmark result from within a checker/callback.
+
+        Complements the regex-based add_bench declarations: use this when
+        the set of metrics is only known at run time (e.g. per-filter cycle
+        stats reconstructed from a trace). The test/target identity is
+        taken from this run.
+
+        `value` is the headline number (an average when the metric was
+        sampled several times). `value_min`/`value_max` optionally record
+        the spread across those samples; leave them unset for a single
+        measurement.
+        """
+        self.runner.register_bench_result(
+            test=self.test.get_full_name() or '',
+            target=self.get_target_name(),
+            metric=metric, value=value, description=description,
+            ref=ref, tol=tol, ref_type=ref_type,
+            value_min=value_min, value_max=value_max)
 
     def kill(self) -> None:
         self.lock.acquire()
@@ -461,9 +530,34 @@ class TestCommon(object):
                 self.full_name =  f'{parent_name}:{self.name}'
 
         self.runner.declare_name(self.full_name)
-        self.benchs: list[list[str]] = []
+        self.benchs: list[testsuite.Bench] = []
+        self._bench_check_added: bool = False
         self.runs: list[TestRun] = []
         self.dependencies: list[TestCommon] = []
+
+    # Shared implementation behind the concrete add_bench methods (see the
+    # set_components() MRO note in testsuite.py for why add_bench itself
+    # cannot live here).
+    def _append_bench(
+        self, name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> None:
+        bench = testsuite.Bench.make(
+            name, extract, desc,
+            ref=ref, tol=tol, tol_pct=tol_pct, ref_type=ref_type)
+        self.benchs.append(bench)
+        # A bench with both a reference and a tolerance gates the test: add
+        # (once) a real check command so an out-of-tolerance or missing
+        # measurement fails the test through the normal command path. The
+        # command reads self.benchs at run time, so it covers every bench
+        # regardless of add order. A ref without a tol stays report-only.
+        if (bench.ref is not None and bench.tol is not None
+                and not self._bench_check_added):
+            self.add_command(testsuite.Checker('bench_check', check_benchs))
+            self._bench_check_added = True
 
     def skip(self, msg: str) -> TestCommon:
         self.skipped = msg
@@ -608,8 +702,15 @@ class TestImpl(TestCommon, testsuite.Test):
         self.runner = runner
         self.name = name
 
-    def add_bench(self, extract: str, name: str, desc: str) -> None:
-        self.benchs.append([extract, name, desc])
+    def add_bench(
+        self, name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> None:
+        self._append_bench(name, extract, desc, ref=ref, tol=tol,
+                           tol_pct=tol_pct, ref_type=ref_type)
 
 
 class MakeTestImpl(TestCommon, testsuite.Test):
@@ -648,8 +749,15 @@ class MakeTestImpl(TestCommon, testsuite.Test):
         if checker is not None:
             self.add_command(testsuite.Checker('check', checker))
 
-    def add_bench(self, extract: str, name: str, desc: str) -> None:
-        self.benchs.append([extract, name, desc])
+    def add_bench(
+        self, name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> None:
+        self._append_bench(name, extract, desc, ref=ref, tol=tol,
+                           tol_pct=tol_pct, ref_type=ref_type)
 
 
 class GvrunTestImpl(testsuite.SdkTest, TestCommon):
@@ -691,8 +799,15 @@ class GvrunTestImpl(testsuite.SdkTest, TestCommon):
         if checker is not None:
             self.add_command(testsuite.Checker('check', checker))
 
-    def add_bench(self, extract: str, name: str, desc: str) -> None:
-        self.benchs.append([extract, name, desc])
+    def add_bench(
+        self, name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> None:
+        self._append_bench(name, extract, desc, ref=ref, tol=tol,
+                           tol_pct=tol_pct, ref_type=ref_type)
 
 
 class SdkTestImpl(testsuite.SdkTest, TestCommon):
@@ -726,8 +841,15 @@ class SdkTestImpl(testsuite.SdkTest, TestCommon):
         if checker is not None:
             self.add_command(testsuite.Checker('check', checker))
 
-    def add_bench(self, extract: str, name: str, desc: str) -> None:
-        self.benchs.append([extract, name, desc])
+    def add_bench(
+        self, name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> None:
+        self._append_bench(name, extract, desc, ref=ref, tol=tol,
+                           tol_pct=tol_pct, ref_type=ref_type)
 
 
 class NetlistPowerSdkTestImpl(SdkTestImpl):

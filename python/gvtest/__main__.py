@@ -164,14 +164,15 @@ parser.add_argument(
     default='junit-reports', help="Specifies flags"
 )
 parser.add_argument(
-    "--bench-regexp", dest="bench_regexp",
-    default='.*@BENCH@(.*)@DESC@(.*)@',
-    help="Specify regexp for extracting benchmark results"
-)
-parser.add_argument(
     "--bench-db", dest="bench_db",
     default=None,
     help="Specify SQLite database for benchmark results"
+)
+parser.add_argument(
+    "--no-bench-check", dest="bench_check", action="store_false",
+    help="Do not fail tests when a benchmark with a declared reference and "
+    "tolerance is out of tolerance (still recorded). Default: benches with "
+    "ref+tol gate the test."
 )
 parser.add_argument(
     "--no-fail", dest="no_fail", action="store_true",
@@ -230,7 +231,7 @@ try:
         commands_exclude=args.commands_exclude,
         flags=args.flags,
         bench_db=args.bench_db,
-        bench_regexp=args.bench_regexp,
+        bench_check=args.bench_check,
         targets=args.targets,
         platform=args.platform, report_all=args.all,
         progress=not args.no_progress,

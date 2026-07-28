@@ -52,7 +52,12 @@ CREATE TABLE IF NOT EXISTS results (
     target      TEXT NOT NULL,
     metric      TEXT NOT NULL,
     value       REAL NOT NULL,
+    value_min   REAL,
+    value_max   REAL,
     description TEXT,
+    reference   REAL,
+    tolerance   REAL,
+    ref_type  TEXT,
     UNIQUE(run_id, test, target, metric)
 );
 
@@ -65,10 +70,34 @@ CREATE INDEX IF NOT EXISTS idx_runs_timestamp
 """
 
 
+_SCHEMA_VERSION = 3
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring a pre-existing database up to the current schema.
+
+    Version 2 added the reference/tolerance/ref_type columns; version 3
+    added value_min/value_max (the spread of a metric measured over
+    several activations). Older rows read back NULL, i.e. measured-only
+    and/or a single measurement with no spread.
+    """
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= _SCHEMA_VERSION:
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(results)")}
+    for col, decl in (('reference', 'REAL'), ('tolerance', 'REAL'),
+                      ('ref_type', 'TEXT'),
+                      ('value_min', 'REAL'), ('value_max', 'REAL')):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE results ADD COLUMN {col} {decl}")
+    conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    conn.commit()
+
+
 def init_db(db_path: str) -> sqlite3.Connection:
     """Create tables if they don't exist. Returns connection."""
     conn = sqlite3.connect(db_path)
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
@@ -112,15 +141,21 @@ def insert_json(db_path: str, json_path: str) -> int | None:
     for result in data.get('results', []):
         conn.execute(
             "INSERT OR IGNORE INTO results "
-            "(run_id, test, target, metric, value, description) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(run_id, test, target, metric, value, value_min, value_max, "
+            "description, reference, tolerance, ref_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 result.get('test', ''),
                 result.get('target', ''),
-                result.get('name', ''),
+                result.get('metric', ''),
                 result.get('value', 0),
-                result.get('desc', ''),
+                result.get('value_min'),
+                result.get('value_max'),
+                result.get('description', ''),
+                result.get('ref'),
+                result.get('tol'),
+                result.get('ref_type'),
             )
         )
 

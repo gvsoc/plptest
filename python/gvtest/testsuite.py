@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import abc
+import dataclasses
 from typing import Any, Callable
 
 
@@ -26,6 +27,59 @@ class Target(object, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def get_name(self) -> str: pass
+
+
+# Allowed reference provenances: 'rtl' (measured on the RTL design),
+# 'analytical' (derived from the timing model's equations), 'measured'
+# (locked-in value measured on the current model — a regression lock).
+REF_TYPES = ('rtl', 'analytical', 'measured')
+
+
+@dataclasses.dataclass(frozen=True)
+class Bench:
+    """A benchmark metric extracted from a test's output.
+
+    `extract` is a regex matched against each output line (start-anchored);
+    its group(1) is the metric value. An optional reference value with an
+    absolute tolerance and a mandatory type (one of REF_TYPES) turns the
+    metric into a calibration point for the bench DB and calibration
+    report.
+    """
+    name: str
+    extract: str
+    desc: str
+    ref: float | None = None
+    tol: float | None = None
+    ref_type: str | None = None
+
+    @staticmethod
+    def make(
+        name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> Bench:
+        if tol is not None and tol_pct is not None:
+            raise ValueError(
+                f'bench {name}: tol and tol_pct are mutually exclusive')
+        if ref is None and (tol is not None or tol_pct is not None
+                            or ref_type is not None):
+            raise ValueError(
+                f'bench {name}: tol/tol_pct/ref_type require ref')
+        if ref is not None and ref_type is None:
+            raise ValueError(
+                f'bench {name}: a reference requires a ref_type '
+                f'(one of {", ".join(REF_TYPES)})')
+        if ref_type is not None and ref_type not in REF_TYPES:
+            raise ValueError(
+                f'bench {name}: unknown ref_type {ref_type!r} '
+                f'(allowed: {", ".join(REF_TYPES)})')
+        if tol_pct is not None:
+            tol = abs(ref) * tol_pct / 100
+        return Bench(name=name, extract=extract,
+                     desc=desc if desc is not None else name,
+                     ref=ref, tol=tol, ref_type=ref_type)
 
 
 class Command:
@@ -78,7 +132,13 @@ class Checker(Command):
 class Test(object, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
-    def add_bench(self, extract: str, name: str, desc: str) -> None: pass
+    def add_bench(
+        self, name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> None: pass
 
     @abc.abstractmethod
     def get_path(self) -> str: pass
@@ -164,7 +224,13 @@ class Testset(object, metaclass=abc.ABCMeta):
 class SdkTest(object, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
-    def add_bench(self, extract: str, name: str, desc: str) -> None: pass
+    def add_bench(
+        self, name: str, extract: str, desc: str | None = None, *,
+        ref: float | None = None,
+        tol: float | None = None,
+        tol_pct: float | None = None,
+        ref_type: str | None = None,
+    ) -> None: pass
 
     # Note: set_components() lives on TestCommon; see Test.set_components
     # note above.

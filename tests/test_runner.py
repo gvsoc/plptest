@@ -467,18 +467,75 @@ def testset_build(testset):
     testset.set_name('bench')
     test = testset.new_test('perf')
     test.add_command(Shell('run', 'echo "Cycles: 42"'))
-    test.add_bench(r'Cycles: (\\d+)', 'cycles', 'CPU cycles')
+    test.add_bench('cycles', r'Cycles: (\\d+)', 'CPU cycles')
 ''')
         r = Runner(properties=[], flags=[], nb_threads=1)
         r.add_testset(str(testset_file))
         r.start()
         r.run()
         r.stop()
-        assert 'cycles' in r.bench_results
-        assert r.bench_results['cycles'][0] == 42.0
+        assert len(r.bench_results) == 1
+        result = r.bench_results[0]
+        assert result['test'] == 'bench:perf'
+        assert result['metric'] == 'cycles'
+        assert result['value'] == 42.0
+        assert result['description'] == 'CPU cycles'
+        assert result['ref'] is None
+        assert result['tol'] is None
+        assert result['ref_type'] is None
 
-    def test_bench_csv_export(self, tmp_path):
-        csv_file = tmp_path / 'bench.csv'
+    def test_bench_with_reference(self, tmp_path):
+        testset_file = tmp_path / 'testset.cfg'
+        testset_file.write_text('''
+from gvtest.testsuite import *
+
+def testset_build(testset):
+    testset.set_name('bench')
+    test = testset.new_test('perf')
+    test.add_command(Shell('run', 'echo "Cycles: 105"'))
+    test.add_bench('cycles', r'Cycles: (\\d+)',
+                   ref=100, tol_pct=10, ref_type='rtl')
+''')
+        r = Runner(properties=[], flags=[], nb_threads=1)
+        r.add_testset(str(testset_file))
+        r.start()
+        r.run()
+        r.stop()
+        result = r.bench_results[0]
+        assert result['value'] == 105.0
+        assert result['ref'] == 100
+        assert result['tol'] == 10.0  # tol_pct converted at declaration
+        assert result['ref_type'] == 'rtl'
+        assert result['description'] == 'cycles'  # defaults to metric name
+
+    def test_register_bench_from_checker(self, tmp_path):
+        # A checker that registers dynamic-metric bench results directly.
+        testset_file = tmp_path / 'testset.cfg'
+        testset_file.write_text('''
+from gvtest.testsuite import *
+
+def _checker(test, output, *a, **k):
+    test.register_bench('filter.a', 12.0, description='fir')
+    test.register_bench('filter.b', 34.0, description='mixer')
+    return (True, 'registered 2 filters')
+
+def testset_build(testset):
+    testset.set_name('bench')
+    test = testset.new_test('perf')
+    test.add_command(Shell('run', 'echo hello'))
+    test.add_command(Checker('check', _checker))
+''')
+        r = Runner(properties=[], flags=[], nb_threads=1)
+        r.add_testset(str(testset_file))
+        r.start()
+        r.run()
+        r.stop()
+        metrics = {res['metric']: res['value'] for res in r.bench_results}
+        assert metrics == {'filter.a': 12.0, 'filter.b': 34.0}
+        assert all(res['test'] == 'bench:perf' for res in r.bench_results)
+
+    def test_bench_db_export(self, tmp_path):
+        db_file = tmp_path / 'bench.sqlite'
         testset_file = tmp_path / 'testset.cfg'
         testset_file.write_text('''
 from gvtest.testsuite import *
@@ -487,16 +544,134 @@ def testset_build(testset):
     testset.set_name('bench')
     test = testset.new_test('perf')
     test.add_command(Shell('run', 'echo "Cycles: 100"'))
-    test.add_bench(r'Cycles: (\\d+)', 'cycles', 'CPU cycles')
+    test.add_bench('cycles', r'Cycles: (\\d+)', 'CPU cycles',
+                   ref=98, tol=5, ref_type='analytical')
 ''')
-        r = Runner(properties=[], flags=[], nb_threads=1, bench_csv_file=str(csv_file))
+        r = Runner(properties=[], flags=[], nb_threads=1,
+                   bench_db=str(db_file))
         r.add_testset(str(testset_file))
         r.start()
         r.run()
         r.stop()
-        assert csv_file.exists()
-        content = csv_file.read_text()
-        assert 'cycles' in content
+        assert db_file.exists()
+        import sqlite3
+        conn = sqlite3.connect(str(db_file))
+        row = conn.execute(
+            "SELECT test, metric, value, reference, tolerance, ref_type "
+            "FROM results").fetchone()
+        conn.close()
+        assert row == ('bench:perf', 'cycles', 100.0, 98.0, 5.0, 'analytical')
+
+
+class TestBenchCheck:
+    """A bench with ref+tol gates the test via an auto-added command."""
+
+    def _run(self, tmp_path, body, bench_check=True):
+        testset_file = tmp_path / 'testset.cfg'
+        testset_file.write_text(
+            'from gvtest.testsuite import *\n\n'
+            'def testset_build(testset):\n'
+            "    testset.set_name('bench')\n"
+            '    test = testset.new_test(\'perf\')\n'
+            + body)
+        r = Runner(properties=[], flags=[], nb_threads=1,
+                   bench_check=bench_check)
+        r.add_testset(str(testset_file))
+        r.start()
+        r.run()
+        r.stop()
+        return r
+
+    def test_command_added_once(self, tmp_path):
+        # Two enforceable benches -> exactly one bench_check command.
+        r = self._run(tmp_path,
+            "    test.add_command(Shell('run', 'echo x'))\n"
+            "    test.add_bench('a', r'a=(\\d+)', ref=1, tol=1, ref_type='rtl')\n"
+            "    test.add_bench('b', r'b=(\\d+)', ref=1, tol=1, ref_type='rtl')\n")
+        test = r.testsets[0].tests[0]
+        names = [c.name for c in test.commands]
+        assert names.count('bench_check') == 1
+
+    def test_in_tolerance_passes(self, tmp_path):
+        r = self._run(tmp_path,
+            "    test.add_command(Shell('run', 'echo \"Cycles: 102\"'))\n"
+            "    test.add_bench('cycles', r'Cycles: (\\d+)', ref=100, tol=5, ref_type='rtl')\n")
+        assert r.stats.stats['failed'] == 0
+        assert r.testsets[0].tests[0].runs[0].status == 'passed'
+
+    def test_out_of_tolerance_fails(self, tmp_path):
+        r = self._run(tmp_path,
+            "    test.add_command(Shell('run', 'echo \"Cycles: 130\"'))\n"
+            "    test.add_bench('cycles', r'Cycles: (\\d+)', ref=100, tol=5, ref_type='rtl')\n")
+        run = r.testsets[0].tests[0].runs[0]
+        assert run.status == 'failed'
+        assert 'cycles' in run.output and 'outside' in run.output
+
+    def test_missing_measurement_fails(self, tmp_path):
+        r = self._run(tmp_path,
+            "    test.add_command(Shell('run', 'echo nothing'))\n"
+            "    test.add_bench('cycles', r'Cycles: (\\d+)', ref=100, tol=5, ref_type='rtl')\n")
+        run = r.testsets[0].tests[0].runs[0]
+        assert run.status == 'failed'
+        assert 'no measurement' in run.output
+
+    def test_ref_without_tol_not_gated(self, tmp_path):
+        # A ref alone is report-only: no bench_check command, never fails.
+        r = self._run(tmp_path,
+            "    test.add_command(Shell('run', 'echo \"Cycles: 130\"'))\n"
+            "    test.add_bench('cycles', r'Cycles: (\\d+)', ref=100, ref_type='rtl')\n")
+        test = r.testsets[0].tests[0]
+        assert 'bench_check' not in [c.name for c in test.commands]
+        assert test.runs[0].status == 'passed'
+
+    def test_no_bench_check_flag_disables(self, tmp_path):
+        r = self._run(tmp_path,
+            "    test.add_command(Shell('run', 'echo \"Cycles: 130\"'))\n"
+            "    test.add_bench('cycles', r'Cycles: (\\d+)', ref=100, tol=5, ref_type='rtl')\n",
+            bench_check=False)
+        # command is present but no-ops; the out-of-tolerance value is
+        # still recorded, the test still passes.
+        assert r.testsets[0].tests[0].runs[0].status == 'passed'
+        assert r.bench_results[0]['value'] == 130.0
+
+
+class TestBenchDeclaration:
+    """Tests for the Bench dataclass validation."""
+
+    def test_tol_pct_conversion(self):
+        from gvtest.testsuite import Bench
+        bench = Bench.make('cycles', r'(\d+)', ref=200, tol_pct=5,
+                           ref_type='rtl')
+        assert bench.tol == 10.0
+        assert bench.desc == 'cycles'
+
+    def test_tol_and_tol_pct_exclusive(self):
+        from gvtest.testsuite import Bench
+        with pytest.raises(ValueError):
+            Bench.make('cycles', r'(\d+)', ref=200, tol=1, tol_pct=5,
+                       ref_type='rtl')
+
+    def test_tol_requires_ref(self):
+        from gvtest.testsuite import Bench
+        with pytest.raises(ValueError):
+            Bench.make('cycles', r'(\d+)', tol=1)
+        with pytest.raises(ValueError):
+            Bench.make('cycles', r'(\d+)', tol_pct=5)
+        with pytest.raises(ValueError):
+            Bench.make('cycles', r'(\d+)', ref_type='rtl')
+
+    def test_ref_requires_ref_type(self):
+        from gvtest.testsuite import Bench
+        with pytest.raises(ValueError):
+            Bench.make('cycles', r'(\d+)', ref=200)
+
+    def test_ref_type_validated(self):
+        from gvtest.testsuite import Bench, REF_TYPES
+        with pytest.raises(ValueError):
+            Bench.make('cycles', r'(\d+)', ref=200, ref_type='guess')
+        for ref_type in REF_TYPES:
+            assert Bench.make('cycles', r'(\d+)', ref=200,
+                              ref_type=ref_type).ref_type == ref_type
 
 
 # ---------------------------------------------------------------------------

@@ -160,7 +160,7 @@ class Runner():
             commands_exclude: list[str] | None = None,
             flags: list[str] | None = None,
             bench_db: str | None = None,
-            bench_regexp: str | None = None,
+            bench_check: bool = True,
             targets: list[str] | None = None,
             platform: str = 'gvsoc',
             report_all: bool = False,
@@ -189,6 +189,9 @@ class Runner():
         self.flags: list[str] = flags if flags is not None else []
         self.bench_results: list[dict[str, Any]] = []
         self.bench_db: str | None = bench_db
+        # When False, the auto-added bench_check commands no-op, so a bench
+        # with a ref+tol is recorded but does not gate the test.
+        self.bench_check: bool = bench_check
         self.properties: dict[str, str] = {}
         self.test_list: list[str] | None = test_list
         self.target_names: list[str] = targets if targets is not None else ['default']
@@ -959,15 +962,25 @@ class Runner():
             self.queue.put(promoted, front=True)
 
     def register_bench_result(
-        self, name: str, value: float, desc: str,
-        test_name: str = '', target: str = ''
+        self, test: str, target: str, metric: str, value: float,
+        description: str = '',
+        ref: float | None = None,
+        tol: float | None = None,
+        ref_type: str | None = None,
+        value_min: float | None = None,
+        value_max: float | None = None,
     ) -> None:
         self.bench_results.append({
-            'name': name,
-            'value': value,
-            'desc': desc,
-            'test': test_name,
+            'test': test,
             'target': target,
+            'metric': metric,
+            'value': value,
+            'value_min': value_min,
+            'value_max': value_max,
+            'description': description,
+            'ref': ref,
+            'tol': tol,
+            'ref_type': ref_type,
         })
 
     def _get_git_info(self, *args: str) -> str | None:
@@ -996,10 +1009,14 @@ class Runner():
         for r in report.get('results', []):
             conn.execute(
                 "INSERT OR IGNORE INTO results "
-                "(run_id, test, target, metric, value, description) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(run_id, test, target, metric, value, value_min, value_max, "
+                "description, reference, tolerance, ref_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, r.get('test', ''), r.get('target', ''),
-                 r.get('name', ''), r.get('value', 0), r.get('desc', ''))
+                 r.get('metric', ''), r.get('value', 0),
+                 r.get('value_min'), r.get('value_max'),
+                 r.get('description', ''),
+                 r.get('ref'), r.get('tol'), r.get('ref_type'))
             )
         conn.commit()
         count = conn.execute(
